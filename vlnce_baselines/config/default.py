@@ -1,8 +1,11 @@
 from typing import List, Optional, Union
 
-import habitat_baselines.config.default
 from habitat.config.default import CONFIG_FILE_SEPARATOR
-from habitat.config.default import Config as CN
+try:
+    from habitat.config.default import Config as CN
+except Exception:
+    # 新加: 在没有旧版 habitat.Config 时回退到本地兼容配置节点。
+    from navmorph_compat import CompatCN as CN
 
 from habitat_extensions.config.default import (
     get_extended_config as get_task_config,
@@ -16,11 +19,19 @@ _C.BASE_TASK_CONFIG_PATH = "habitat_extensions/config/vlnce_task.yaml"
 _C.TASK_CONFIG = CN()  # task_config will be stored as a config node
 _C.TRAINER_NAME = "dagger"
 _C.ENV_NAME = "VLNCEDaggerEnv"
+_C.local_rank = 0
 _C.SIMULATOR_GPU_IDS = [0]
+_C.TORCH_GPU_ID = 0
+_C.TORCH_GPU_IDS = [0]
+_C.GPU_NUMBERS = 1
+_C.NUM_ENVIRONMENTS = 1
 _C.VIDEO_OPTION = []  # options: "disk", "tensorboard"
 _C.VIDEO_DIR = "videos/debug"
 _C.TENSORBOARD_DIR = "data/tensorboard_dirs/debug"
 _C.RESULTS_DIR = "data/checkpoints/pretrained/evals"
+_C.CHECKPOINT_FOLDER = "data/checkpoints/debug"
+_C.EVAL_CKPT_PATH_DIR = "data/checkpoints/debug"
+_C.LOG_FILE = "train.log"
 
 # -----------------------------------------------------------------------------
 # EVAL CONFIG
@@ -32,6 +43,7 @@ _C.EVAL.EPISODE_COUNT = -1
 _C.EVAL.LANGUAGES = ["en-US", "en-IN"]
 _C.EVAL.SAMPLE = False
 _C.EVAL.SAVE_RESULTS = True
+_C.EVAL.LOG_EVERY_EPISODE = 1
 _C.EVAL.EVAL_NONLEARNING = False
 _C.EVAL.NONLEARNING = CN()
 _C.EVAL.NONLEARNING.AGENT = "RandomAgent"
@@ -180,11 +192,335 @@ _C.MODEL.PROGRESS_MONITOR = CN()
 _C.MODEL.PROGRESS_MONITOR.use = False
 _C.MODEL.PROGRESS_MONITOR.alpha = 1.0  # loss multiplier
 
+# -----------------------------------------------------------------------------
+# STATENAV CONFIG
+# -----------------------------------------------------------------------------
+_C.STATENAV = CN()
+_C.STATENAV.hidden_dim = 512
+_C.STATENAV.action_dim = 512
+_C.STATENAV.latent_groups = 16
+_C.STATENAV.latent_classes = 16
+_C.STATENAV.state_bins = 10
+_C.STATENAV.chunk_len = 16
+_C.STATENAV.lambda_kl = 0.1
+_C.STATENAV.lambda_state = 0.5
+_C.STATENAV.gamma_rank = 0.3
+_C.STATENAV.rank_margin = 0.05
+_C.STATENAV.adapter_delta_scale = 0.1
+_C.STATENAV.adapter_init_logit_scale = -3.0
+_C.STATENAV.adapter_uncert_gamma = 2.0
+_C.STATENAV.adapter_cautious_bias_scale = 0.02
+_C.STATENAV.adapter_stop_idx = 0
+_C.STATENAV.adapter_stop_exempt = True
+_C.STATENAV.adapter_warmup_steps = 2000
+_C.STATENAV.uncert_alpha_ent = 1.0  # unused_for_v3_main_path
+_C.STATENAV.uncert_alpha_kl = 1.0  # unused_for_v3_main_path
+_C.STATENAV.use_reality_calibration = False
+_C.STATENAV.lambda_u = 1.0
+_C.STATENAV.lambda_s = 0.0
+_C.STATENAV.lambda_curve = 1.0
+_C.STATENAV.lambda_imagination = 0.1
+_C.STATENAV.lambda_health = 0.1
+_C.STATENAV.lambda_imagination_health = 0.5
+_C.STATENAV.lambda_contrast = 0.1
+_C.STATENAV.lambda_attn = 0.05
+_C.STATENAV.lambda_relation_aux = 0.1
+_C.STATENAV.lambda_health_entropy = 0.01
+_C.STATENAV.lambda_curve_health = 1.0
+_C.STATENAV.lambda_attn_health = 0.25
+_C.STATENAV.decision_mode = "self_state_adapter"
+_C.STATENAV.eval_action_source = "statenav"
+_C.STATENAV.decision_alpha_u = 0.0
+_C.STATENAV.decision_beta_d = 1.0
+_C.STATENAV.progress_curve_horizon = 5
+_C.STATENAV.progress_curve_hidden_dim = 256
+_C.STATENAV.progress_curve_smooth_window = 3
+_C.STATENAV.relation_dim = 512
+_C.STATENAV.use_imagination_rollout = True
+_C.STATENAV.imagination_horizon = 3
+_C.STATENAV.imagination_topk = 5
+_C.STATENAV.dt_low_percentile = 0.75
+_C.STATENAV.dt_high_percentile = 0.95
+_C.STATENAV.dt_threshold_ema = 0.95
+_C.STATENAV.attn_warmup_steps = 500
+_C.STATENAV.high_level_backtrack_bias = 5.0
+_C.STATENAV.enable_level2_frontier = True
+# Keep Level-3 opt-in by default until EB-01 is closed by diagnostics.
+_C.STATENAV.enable_level3_macro = False
+_C.STATENAV.level3_policy = "energy_recovery"
+_C.STATENAV.level3_min_step = 3
+_C.STATENAV.level3_min_dnorm = 1.0
+_C.STATENAV.level3_switch_margin = 0.0
+_C.STATENAV.level3_allow_stop = False
+_C.STATENAV.level3_stop_margin = 0.0
+_C.STATENAV.backtrack_history_size = 8
+_C.STATENAV.backtrack_recency_bias = 0.05
+_C.STATENAV.use_relation_state_extractor = True
+_C.STATENAV.use_attention_transition = True
+_C.STATENAV.use_open_eye_rollout = True
+_C.STATENAV.contrast_margin = 0.1
+_C.STATENAV.gumbel_temp = 1.0
+_C.STATENAV.hard_gumbel = True
+_C.STATENAV.free_bits = 0.0  # used_in_training_kl_loss_only for V3 main path
+_C.STATENAV.kl_warmup_steps = 2000
+_C.STATENAV.grad_clip_norm = 5.0
+_C.STATENAV.max_keep_checkpoints = 3
+_C.STATENAV.stage2_etp_lr_scale = 0.1
+
+_C.STATENAV.LOGGING = CN()
+_C.STATENAV.LOGGING.use_tqdm = True
+_C.STATENAV.LOGGING.step_log_every = 1
+_C.STATENAV.LOGGING.write_step_metrics = True
+_C.STATENAV.LOGGING.step_metrics_filename = "step_metrics.tsv"
+_C.STATENAV.LOGGING.log_full_model_report_to_runtime = False
+_C.STATENAV.LOGGING.save_best_by_train_loss = False
+_C.STATENAV.LOGGING.log_prior_post_metrics = False
+_C.STATENAV.LOGGING.log_prior_post_eval = False
+_C.STATENAV.LOGGING.save_v4_episode_traces = False
+_C.STATENAV.LOGGING.v4_trace_dirname = "v4_traces"
+_C.STATENAV.LOGGING.v4_trace_max_episodes = 20
+_C.STATENAV.LOGGING.v4_trace_topk = 5
+_C.STATENAV.LOGGING.save_v5_episode_traces = False
+_C.STATENAV.LOGGING.v5_trace_dirname = "v5_traces"
+_C.STATENAV.LOGGING.v5_trace_max_episodes = 20
+_C.STATENAV.LOGGING.v5_trace_topk = 5
+
+_C.STATENAV.stage2_unfreeze_keywords = [
+    "global_sap_head",
+    "global_encoder.encoder.x_layers",
+]
+
+_C.STATENAV.LABEL_BUILDER = CN()
+_C.STATENAV.LABEL_BUILDER.state_bins = 10
+_C.STATENAV.LABEL_BUILDER.prefix_radius = 3.0
+_C.STATENAV.LABEL_BUILDER.local_window = 1
+_C.STATENAV.LABEL_BUILDER.deviation_threshold = 3.0
+_C.STATENAV.LABEL_BUILDER.off_path_threshold = 4.5
+_C.STATENAV.LABEL_BUILDER.heading_threshold_rad = 1.0471975512
+_C.STATENAV.LABEL_BUILDER.repeated_window = 6
+_C.STATENAV.LABEL_BUILDER.repeated_ratio_threshold = 0.5
+_C.STATENAV.LABEL_BUILDER.candidate_instability_window = 4
+_C.STATENAV.LABEL_BUILDER.candidate_instability_threshold = 0.75
+_C.STATENAV.LABEL_BUILDER.recovery_tolerance_steps = 1
+_C.STATENAV.LABEL_BUILDER.max_prefix_backtrack = 1
+_C.STATENAV.LABEL_BUILDER.min_valid_conditions = 3
+
 
 def purge_keys(config: CN, keys: List[str]) -> None:
     for k in keys:
-        del config[k]
+        # 新加: 兼容新版配置结构中某些旧键已不存在的情况。
+        if k in config:
+            del config[k]
         config.register_deprecated_key(k)
+
+
+# 新加: 将旧版平铺配置镜像到新版 habitat_baselines.* 命名空间。
+def apply_habitat_baselines_namespace(config: CN) -> None:
+    if not hasattr(config, "habitat_baselines"):
+        # 新加: 新版 habitat-baselines 统一从 habitat_baselines 根命名空间取配置。
+        config.habitat_baselines = CN()
+    if not hasattr(config.habitat_baselines, "il"):
+        # 新加: 兼容新版 IL 输出目录与评估结果开关的读取路径。
+        config.habitat_baselines.il = CN()
+    if not hasattr(config.habitat_baselines, "rl"):
+        # 新加: 兼容新版 RL/obs_transforms 配置命名空间。
+        config.habitat_baselines.rl = CN()
+    if not hasattr(config.habitat_baselines.rl, "policy"):
+        # 新加: 上游会从 habitat_baselines.rl.policy.* 读取策略配置。
+        config.habitat_baselines.rl.policy = CN()
+
+    # 新加: 将旧版顶层输出路径与设备配置镜像到新版默认字段。
+    config.habitat_baselines.checkpoint_folder = config.CHECKPOINT_FOLDER
+    config.habitat_baselines.tensorboard_dir = config.TENSORBOARD_DIR
+    config.habitat_baselines.video_dir = config.VIDEO_DIR
+    config.habitat_baselines.log_file = config.LOG_FILE
+    config.habitat_baselines.num_environments = config.NUM_ENVIRONMENTS
+    config.habitat_baselines.torch_gpu_id = config.TORCH_GPU_ID
+    config.habitat_baselines.il.results_dir = config.RESULTS_DIR + "/{split}"
+    config.habitat_baselines.il.eval_save_results = config.EVAL.SAVE_RESULTS
+    config.habitat_baselines.il.output_log_dir = "data/logs"
+
+    # 新加：把旧版 RL.POLICY.OBS_TRANSFORMS 镜像到新版 habitat_baselines.rl.policy.*。
+    agent_name = "main_agent"
+    if not hasattr(config.habitat_baselines.rl.policy, agent_name):
+        # 新加: 新版单智能体默认按 main_agent 组织策略配置。
+        setattr(config.habitat_baselines.rl.policy, agent_name, CN())
+
+    policy_cfg = getattr(config.habitat_baselines.rl.policy, agent_name)
+    # 新加: 继续沿用 ETPNav 自己的 policy_name，不引入新的策略定义。
+    policy_cfg.name = getattr(config.MODEL, "policy_name", "Policy")
+    policy_cfg.obs_transforms = CN()
+
+    # 新加: 将旧版 ENABLED_TRANSFORMS 列表展开成新版逐 transform 子节点结构。
+    enabled = list(getattr(config.RL.POLICY.OBS_TRANSFORMS, "ENABLED_TRANSFORMS", []))
+    for transform_name in enabled:
+        transform_key = transform_name.lower()
+        transform_cfg = CN()
+        # 新加: 上游 registry 通过 type 字段定位具体 ObservationTransformer。
+        transform_cfg.type = transform_name
+        transform_cfg.RL = CN()
+        transform_cfg.RL.POLICY = CN()
+        # 新加: 复用 ETPNav 原始 OBS_TRANSFORMS 配置，保持参数语义不变。
+        transform_cfg.RL.POLICY.OBS_TRANSFORMS = config.RL.POLICY.OBS_TRANSFORMS.clone()
+        setattr(policy_cfg.obs_transforms, transform_key, transform_cfg)
+
+
+# 新加: 兼容旧配置系统 merge_from_list 后数值字段被保留为字符串的情况。
+def coerce_legacy_scalar_types(config: CN) -> None:
+    def _to_bool(value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    config.local_rank = int(config.local_rank)
+    config.TORCH_GPU_ID = int(config.TORCH_GPU_ID)
+    config.GPU_NUMBERS = int(config.GPU_NUMBERS)
+    config.NUM_ENVIRONMENTS = int(config.NUM_ENVIRONMENTS)
+    config.IL.lr = float(config.IL.lr)
+    config.IL.batch_size = int(config.IL.batch_size)
+    config.IL.epochs = int(config.IL.epochs)
+    config.STATENAV.hidden_dim = int(config.STATENAV.hidden_dim)
+    config.STATENAV.action_dim = int(config.STATENAV.action_dim)
+    config.STATENAV.latent_groups = int(config.STATENAV.latent_groups)
+    config.STATENAV.latent_classes = int(config.STATENAV.latent_classes)
+    config.STATENAV.state_bins = int(config.STATENAV.state_bins)
+    config.STATENAV.chunk_len = int(config.STATENAV.chunk_len)
+    config.STATENAV.lambda_kl = float(config.STATENAV.lambda_kl)
+    config.STATENAV.lambda_state = float(config.STATENAV.lambda_state)
+    config.STATENAV.gamma_rank = float(config.STATENAV.gamma_rank)
+    config.STATENAV.rank_margin = float(config.STATENAV.rank_margin)
+    config.STATENAV.adapter_delta_scale = float(config.STATENAV.adapter_delta_scale)
+    config.STATENAV.adapter_init_logit_scale = float(config.STATENAV.adapter_init_logit_scale)
+    config.STATENAV.adapter_uncert_gamma = float(config.STATENAV.adapter_uncert_gamma)
+    config.STATENAV.adapter_cautious_bias_scale = float(config.STATENAV.adapter_cautious_bias_scale)
+    config.STATENAV.adapter_stop_idx = int(config.STATENAV.adapter_stop_idx)
+    config.STATENAV.adapter_stop_exempt = _to_bool(config.STATENAV.adapter_stop_exempt)
+    config.STATENAV.adapter_warmup_steps = int(config.STATENAV.adapter_warmup_steps)
+    config.STATENAV.uncert_alpha_ent = float(config.STATENAV.uncert_alpha_ent)
+    config.STATENAV.uncert_alpha_kl = float(config.STATENAV.uncert_alpha_kl)
+    config.STATENAV.use_reality_calibration = _to_bool(config.STATENAV.use_reality_calibration)
+    config.STATENAV.lambda_u = float(config.STATENAV.lambda_u)
+    config.STATENAV.lambda_s = float(config.STATENAV.lambda_s)
+    config.STATENAV.lambda_curve = float(config.STATENAV.lambda_curve)
+    config.STATENAV.lambda_imagination = float(config.STATENAV.lambda_imagination)
+    config.STATENAV.lambda_health = float(config.STATENAV.lambda_health)
+    config.STATENAV.lambda_imagination_health = float(config.STATENAV.lambda_imagination_health)
+    config.STATENAV.lambda_contrast = float(config.STATENAV.lambda_contrast)
+    config.STATENAV.lambda_attn = float(config.STATENAV.lambda_attn)
+    config.STATENAV.lambda_relation_aux = float(config.STATENAV.lambda_relation_aux)
+    config.STATENAV.lambda_health_entropy = float(config.STATENAV.lambda_health_entropy)
+    config.STATENAV.lambda_curve_health = float(config.STATENAV.lambda_curve_health)
+    config.STATENAV.lambda_attn_health = float(config.STATENAV.lambda_attn_health)
+    config.STATENAV.decision_mode = str(config.STATENAV.decision_mode)
+    config.STATENAV.eval_action_source = str(config.STATENAV.eval_action_source)
+    config.STATENAV.decision_alpha_u = float(config.STATENAV.decision_alpha_u)
+    config.STATENAV.decision_beta_d = float(config.STATENAV.decision_beta_d)
+    config.STATENAV.progress_curve_horizon = int(config.STATENAV.progress_curve_horizon)
+    config.STATENAV.progress_curve_hidden_dim = int(config.STATENAV.progress_curve_hidden_dim)
+    config.STATENAV.progress_curve_smooth_window = int(config.STATENAV.progress_curve_smooth_window)
+    config.STATENAV.relation_dim = int(config.STATENAV.relation_dim)
+    config.STATENAV.use_imagination_rollout = _to_bool(config.STATENAV.use_imagination_rollout)
+    config.STATENAV.imagination_horizon = int(config.STATENAV.imagination_horizon)
+    config.STATENAV.imagination_topk = int(config.STATENAV.imagination_topk)
+    config.STATENAV.dt_low_percentile = float(config.STATENAV.dt_low_percentile)
+    config.STATENAV.dt_high_percentile = float(config.STATENAV.dt_high_percentile)
+    config.STATENAV.dt_threshold_ema = float(config.STATENAV.dt_threshold_ema)
+    config.STATENAV.attn_warmup_steps = int(config.STATENAV.attn_warmup_steps)
+    config.STATENAV.high_level_backtrack_bias = float(config.STATENAV.high_level_backtrack_bias)
+    config.STATENAV.enable_level2_frontier = _to_bool(config.STATENAV.enable_level2_frontier)
+    config.STATENAV.enable_level3_macro = _to_bool(config.STATENAV.enable_level3_macro)
+    config.STATENAV.level3_policy = str(config.STATENAV.level3_policy)
+    config.STATENAV.level3_min_step = int(config.STATENAV.level3_min_step)
+    config.STATENAV.level3_min_dnorm = float(config.STATENAV.level3_min_dnorm)
+    config.STATENAV.level3_switch_margin = float(config.STATENAV.level3_switch_margin)
+    config.STATENAV.level3_allow_stop = _to_bool(config.STATENAV.level3_allow_stop)
+    config.STATENAV.level3_stop_margin = float(config.STATENAV.level3_stop_margin)
+    config.STATENAV.backtrack_history_size = int(config.STATENAV.backtrack_history_size)
+    config.STATENAV.backtrack_recency_bias = float(config.STATENAV.backtrack_recency_bias)
+    config.STATENAV.use_relation_state_extractor = _to_bool(
+        config.STATENAV.use_relation_state_extractor
+    )
+    config.STATENAV.use_attention_transition = _to_bool(
+        config.STATENAV.use_attention_transition
+    )
+    config.STATENAV.use_open_eye_rollout = _to_bool(
+        config.STATENAV.use_open_eye_rollout
+    )
+    config.STATENAV.contrast_margin = float(config.STATENAV.contrast_margin)
+    config.STATENAV.gumbel_temp = float(config.STATENAV.gumbel_temp)
+    config.STATENAV.hard_gumbel = _to_bool(config.STATENAV.hard_gumbel)
+    config.STATENAV.free_bits = float(config.STATENAV.free_bits)
+    config.STATENAV.kl_warmup_steps = int(config.STATENAV.kl_warmup_steps)
+    config.STATENAV.grad_clip_norm = float(config.STATENAV.grad_clip_norm)
+    config.STATENAV.max_keep_checkpoints = int(config.STATENAV.max_keep_checkpoints)
+    config.STATENAV.stage2_etp_lr_scale = float(config.STATENAV.stage2_etp_lr_scale)
+    config.STATENAV.LOGGING.log_prior_post_metrics = _to_bool(
+        config.STATENAV.LOGGING.log_prior_post_metrics
+    )
+    config.STATENAV.LOGGING.log_prior_post_eval = _to_bool(
+        config.STATENAV.LOGGING.log_prior_post_eval
+    )
+    config.STATENAV.LOGGING.save_v4_episode_traces = _to_bool(
+        config.STATENAV.LOGGING.save_v4_episode_traces
+    )
+    config.STATENAV.LOGGING.v4_trace_dirname = str(config.STATENAV.LOGGING.v4_trace_dirname)
+    config.STATENAV.LOGGING.v4_trace_max_episodes = int(
+        config.STATENAV.LOGGING.v4_trace_max_episodes
+    )
+    config.STATENAV.LOGGING.v4_trace_topk = int(config.STATENAV.LOGGING.v4_trace_topk)
+    config.STATENAV.LOGGING.save_v5_episode_traces = _to_bool(
+        getattr(
+            config.STATENAV.LOGGING,
+            "save_v5_episode_traces",
+            config.STATENAV.LOGGING.save_v4_episode_traces,
+        )
+    )
+    config.STATENAV.LOGGING.v5_trace_dirname = str(
+        getattr(config.STATENAV.LOGGING, "v5_trace_dirname", "v5_traces")
+    )
+    config.STATENAV.LOGGING.v5_trace_max_episodes = int(
+        getattr(
+            config.STATENAV.LOGGING,
+            "v5_trace_max_episodes",
+            config.STATENAV.LOGGING.v4_trace_max_episodes,
+        )
+    )
+    config.STATENAV.LOGGING.v5_trace_topk = int(
+        getattr(
+            config.STATENAV.LOGGING,
+            "v5_trace_topk",
+            config.STATENAV.LOGGING.v4_trace_topk,
+        )
+    )
+    config.STATENAV.LABEL_BUILDER.state_bins = int(config.STATENAV.LABEL_BUILDER.state_bins)
+    config.STATENAV.LABEL_BUILDER.prefix_radius = float(config.STATENAV.LABEL_BUILDER.prefix_radius)
+    config.STATENAV.LABEL_BUILDER.local_window = int(config.STATENAV.LABEL_BUILDER.local_window)
+    config.STATENAV.LABEL_BUILDER.deviation_threshold = float(config.STATENAV.LABEL_BUILDER.deviation_threshold)
+    config.STATENAV.LABEL_BUILDER.off_path_threshold = float(config.STATENAV.LABEL_BUILDER.off_path_threshold)
+    config.STATENAV.LABEL_BUILDER.heading_threshold_rad = float(
+        config.STATENAV.LABEL_BUILDER.heading_threshold_rad
+    )
+    config.STATENAV.LABEL_BUILDER.repeated_window = int(config.STATENAV.LABEL_BUILDER.repeated_window)
+    config.STATENAV.LABEL_BUILDER.repeated_ratio_threshold = float(
+        config.STATENAV.LABEL_BUILDER.repeated_ratio_threshold
+    )
+    config.STATENAV.LABEL_BUILDER.candidate_instability_window = int(
+        config.STATENAV.LABEL_BUILDER.candidate_instability_window
+    )
+    config.STATENAV.LABEL_BUILDER.candidate_instability_threshold = float(
+        config.STATENAV.LABEL_BUILDER.candidate_instability_threshold
+    )
+    config.STATENAV.LABEL_BUILDER.recovery_tolerance_steps = int(
+        config.STATENAV.LABEL_BUILDER.recovery_tolerance_steps
+    )
+    config.STATENAV.LABEL_BUILDER.max_prefix_backtrack = int(
+        config.STATENAV.LABEL_BUILDER.max_prefix_backtrack
+    )
+    config.STATENAV.LABEL_BUILDER.min_valid_conditions = int(
+        config.STATENAV.LABEL_BUILDER.min_valid_conditions
+    )
 
 
 def get_config(
@@ -201,10 +537,9 @@ def get_config(
         command line into the config. For example, `opts = ['FOO.BAR',
         0.5]`. Argument can be used for parameter sweeping or quick tests.
     """
-    config = CN()
-    config.merge_from_other_cfg(habitat_baselines.config.default._C)
+    # 新加: 不再依赖新版 habitat-baselines 内部私有默认配置结构。
+    config = _C.clone()
     purge_keys(config, ["SIMULATOR_GPU_ID", "TEST_EPISODE_COUNT"])
-    config.merge_from_other_cfg(_C.clone())
 
     if config_paths:
         if isinstance(config_paths, str):
@@ -225,6 +560,10 @@ def get_config(
     if opts:
         config.CMD_TRAILING_OPTS = opts
         config.merge_from_list(opts)
+
+    # 新加: 在完成文件与命令行合并后，统一纠正关键标量字段的运行时类型。
+    coerce_legacy_scalar_types(config)
+    apply_habitat_baselines_namespace(config)
 
     config.freeze()
     return config

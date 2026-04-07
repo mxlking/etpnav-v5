@@ -19,7 +19,12 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 import tqdm
 from gym import Space
-from habitat import Config, logger
+try:
+    from habitat import Config, logger
+except Exception:
+    from vlnce_baselines.config.shim_config import Config
+    import logging
+    logger = logging.getLogger(__name__)
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.environments import get_env_class
 from habitat_baselines.common.obs_transformers import (
@@ -33,6 +38,7 @@ from habitat_baselines.utils.common import batch_obs
 from vlnce_baselines.common.aux_losses import AuxLosses
 from vlnce_baselines.common.base_il_trainer import BaseVLNCETrainer
 from vlnce_baselines.common.env_utils import construct_envs, construct_envs_for_rl, is_slurm_batch_job
+from vlnce_baselines.utils import load_torch_checkpoint_compat
 from vlnce_baselines.common.utils import extract_instruction_tokens
 from vlnce_baselines.models.graph_utils import GraphMap, MAX_DIST
 from vlnce_baselines.utils import reduce_loss
@@ -47,7 +53,11 @@ from fastdtw import fastdtw
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
-    import tensorflow as tf  # noqa: F401
+    try:
+        import tensorflow as tf  # noqa: F401
+    except ImportError:
+        # 新加: eval 路径下 tensorflow 不是硬依赖，缺失时允许继续启动。
+        tf = None
 
 import torch.distributed as distr
 import gzip
@@ -56,6 +66,11 @@ from copy import deepcopy
 from torch.cuda.amp import autocast, GradScaler
 from vlnce_baselines.common.ops import pad_tensors_wgrad, gen_seq_masks
 from torch.nn.utils.rnn import pad_sequence
+
+
+def _append_measurement_once(measurements, name):
+    if name not in measurements:
+        measurements.append(name)
 
 
 @baseline_registry.register_trainer(name="SS-ETP")
@@ -72,6 +87,10 @@ class RLTrainer(BaseVLNCETrainer):
                 self._make_results_dir()
 
     def save_checkpoint(self, iteration: int):
+        # 新加: 只保留最新 3 个 checkpoint，避免磁盘写满。
+        import glob
+        ckpt_dir = self.config.CHECKPOINT_FOLDER
+        os.makedirs(ckpt_dir, exist_ok=True)
         torch.save(
             obj={
                 "state_dict": self.policy.state_dict(),
@@ -79,8 +98,14 @@ class RLTrainer(BaseVLNCETrainer):
                 "optim_state": self.optimizer.state_dict(),
                 "iteration": iteration,
             },
-            f=os.path.join(self.config.CHECKPOINT_FOLDER, f"ckpt.iter{iteration}.pth"),
+            f=os.path.join(ckpt_dir, f"ckpt.iter{iteration}.pth"),
         )
+        MAX_KEEP = 3
+        existing = sorted(glob.glob(os.path.join(ckpt_dir, "ckpt.iter*.pth")))
+        while len(existing) > MAX_KEEP:
+            oldest = existing.pop(0)
+            os.remove(oldest)
+            logger.info(f"Removed old checkpoint: {oldest}")
 
     def _set_config(self):
         self.split = self.config.TASK_CONFIG.DATASET.SPLIT
@@ -147,13 +172,24 @@ class RLTrainer(BaseVLNCETrainer):
         self.world_size = self.config.GPU_NUMBERS
         self.local_rank = self.config.local_rank
         self.batch_size = self.config.IL.batch_size
-        torch.cuda.set_device(self.device)
+        self.device_id = self.config.TORCH_GPU_ID
+
         if self.world_size > 1:
-            distr.init_process_group(backend='nccl', init_method='env://')
-            self.device = self.config.TORCH_GPU_IDS[self.local_rank]
+            # 1) 先确定当前 rank 应该使用的逻辑 GPU
+            self.device_id = self.config.TORCH_GPU_IDS[self.local_rank]
+            self.device = torch.device("cuda", self.device_id)
+
+            # 2) 先绑定当前进程到正确的 GPU
+            torch.cuda.set_device(self.device)
+
+            # 3) 再初始化分布式，避免 NCCL/torch 抢先在 cuda:0 建 context
+            distr.init_process_group(backend="nccl", init_method="env://")
+
             self.config.defrost()
-            self.config.TORCH_GPU_ID = self.config.TORCH_GPU_IDS[self.local_rank]
+            self.config.TORCH_GPU_ID = self.device_id
             self.config.freeze()
+        else:
+            self.device = torch.device("cuda", self.device_id)
             torch.cuda.set_device(self.device)
 
     def _init_envs(self):
@@ -197,7 +233,8 @@ class RLTrainer(BaseVLNCETrainer):
         from vlnce_baselines.waypoint_pred.TRM_net import BinaryDistPredictor_TRM
         self.waypoint_predictor = BinaryDistPredictor_TRM(device=self.device)
         cwp_fn = 'data/wp_pred/check_cwp_bestdist_hfov63' if self.config.MODEL.task_type == 'rxr' else 'data/wp_pred/check_cwp_bestdist_hfov90'
-        self.waypoint_predictor.load_state_dict(torch.load(cwp_fn, map_location = torch.device('cpu'))['predictor']['state_dict'])
+        # 新加: 兼容 PyTorch 2.6+ 加载旧版 waypoint predictor checkpoint。
+        self.waypoint_predictor.load_state_dict(load_torch_checkpoint_compat(cwp_fn, map_location = torch.device('cpu'))['predictor']['state_dict'])
         for param in self.waypoint_predictor.parameters():
             param.requires_grad_(False)
 
@@ -208,8 +245,8 @@ class RLTrainer(BaseVLNCETrainer):
         if self.config.GPU_NUMBERS > 1:
             print('Using', self.config.GPU_NUMBERS,'GPU!')
             # find_unused_parameters=False fix ddp bug
-            self.policy.net = DDP(self.policy.net.to(self.device), device_ids=[self.device],
-                output_device=self.device, find_unused_parameters=False, broadcast_buffers=False)
+            self.policy.net = DDP(self.policy.net.to(self.device), device_ids=[self.device_id],
+                output_device=self.device_id, find_unused_parameters=False, broadcast_buffers=False)
         self.optimizer = torch.optim.AdamW(self.policy.parameters(), lr=self.config.IL.lr)
 
         if load_from_ckpt:
@@ -225,13 +262,19 @@ class RLTrainer(BaseVLNCETrainer):
 
             if 'module' in list(ckpt_dict['state_dict'].keys())[0] and self.config.GPU_NUMBERS == 1:
                 self.policy.net = torch.nn.DataParallel(self.policy.net.to(self.device),
-                    device_ids=[self.device], output_device=self.device)
-                self.policy.load_state_dict(ckpt_dict["state_dict"], strict=False)
+                    device_ids=[self.device_id], output_device=self.device_id)
+                # 新加: 打印 missing/unexpected keys，排查权重是否完整加载。
+                msg = self.policy.load_state_dict(ckpt_dict["state_dict"], strict=False)
+                logger.info(f"[CKPT] missing_keys({len(msg.missing_keys)}): {msg.missing_keys[:30]}")
+                logger.info(f"[CKPT] unexpected_keys({len(msg.unexpected_keys)}): {msg.unexpected_keys[:30]}")
                 self.policy.net = self.policy.net.module
                 self.waypoint_predictor = torch.nn.DataParallel(self.waypoint_predictor.to(self.device),
-                    device_ids=[self.device], output_device=self.device)
+                    device_ids=[self.device_id], output_device=self.device_id)
             else:
-                self.policy.load_state_dict(ckpt_dict["state_dict"], strict=False)
+                # 新加: 打印 missing/unexpected keys，排查权重是否完整加载。
+                msg = self.policy.load_state_dict(ckpt_dict["state_dict"], strict=False)
+                logger.info(f"[CKPT] missing_keys({len(msg.missing_keys)}): {msg.missing_keys[:30]}")
+                logger.info(f"[CKPT] unexpected_keys({len(msg.unexpected_keys)}): {msg.unexpected_keys[:30]}")
             if config.IL.is_requeue:
                 self.optimizer.load_state_dict(ckpt_dict["optim_state"])
             logger.info(f"Loaded weights from checkpoint: {ckpt_path}, iteration: {start_iter}")
@@ -278,19 +321,35 @@ class RLTrainer(BaseVLNCETrainer):
     def _teacher_action_new(self, batch_gmap_vp_ids, batch_no_vp_left):
         teacher_actions = []
         cur_episodes = self.envs.current_episodes()
+        num_envs = self.envs.num_envs
+        curr_dists_to_goal = self.envs.call(["current_dist_to_goal"] * num_envs)
+
+        spl_batch_ghost_vp_pos = []
+        spl_batch_positions = []
+        for gmap, no_vp_left, curr_dis_to_goal in zip(self.gmaps, batch_no_vp_left, curr_dists_to_goal):
+            if curr_dis_to_goal < 1.5 or no_vp_left or self.config.IL.expert_policy != 'spl':
+                spl_batch_ghost_vp_pos.append([])
+                spl_batch_positions.append({"positions": []})
+            else:
+                ghost_vp_pos = [(vp, random.choice(pos)) for vp, pos in gmap.ghost_real_pos.items()]
+                spl_batch_ghost_vp_pos.append(ghost_vp_pos)
+                spl_batch_positions.append({"positions": [p[1] for p in ghost_vp_pos]})
+
+        spl_batch_distances = self.envs.call(
+            ["point_dist_to_goals_batch"] * num_envs,
+            spl_batch_positions,
+        )
+
         for i, (gmap_vp_ids, gmap, no_vp_left) in enumerate(zip(batch_gmap_vp_ids, self.gmaps, batch_no_vp_left)):
-            curr_dis_to_goal = self.envs.call_at(i, "current_dist_to_goal")
+            curr_dis_to_goal = curr_dists_to_goal[i]
             if curr_dis_to_goal < 1.5:
                 teacher_actions.append(0)
             else:
                 if no_vp_left:
                     teacher_actions.append(-100)
                 elif self.config.IL.expert_policy == 'spl':
-                    ghost_vp_pos = [(vp, random.choice(pos)) for vp, pos in gmap.ghost_real_pos.items()]
-                    ghost_dis_to_goal = [
-                        self.envs.call_at(i, "point_dist_to_goal", {"pos": p[1]})
-                        for p in ghost_vp_pos
-                    ]
+                    ghost_vp_pos = spl_batch_ghost_vp_pos[i]
+                    ghost_dis_to_goal = spl_batch_distances[i]
                     target_ghost_vp = ghost_vp_pos[np.argmin(ghost_dis_to_goal)][0]
                     teacher_actions.append(gmap_vp_ids.index(target_ghost_vp))
                 elif self.config.IL.expert_policy == 'ndtw':
@@ -311,7 +370,7 @@ class RLTrainer(BaseVLNCETrainer):
 
         for i in range(self.envs.num_envs):
             rgb_fts, dep_fts, loc_fts , nav_types = [], [], [], []
-            cand_idxes = np.zeros(12, dtype=np.bool)
+            cand_idxes = np.zeros(12, dtype=bool)
             cand_idxes[obs['cand_img_idxes'][i]] = True
             # cand
             rgb_fts.append(obs['cand_rgb'][i])
@@ -523,11 +582,15 @@ class RLTrainer(BaseVLNCETrainer):
         self.config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.SHUFFLE = False
         self.config.TASK_CONFIG.ENVIRONMENT.ITERATOR_OPTIONS.MAX_SCENE_REPEAT_STEPS = -1
         self.config.IL.ckpt_to_load = checkpoint_path
+        # 新加: 当前 eval 汇总逻辑依赖这些 measures，不启用会在 info 中缺字段。
+        _append_measurement_once(self.config.TASK_CONFIG.TASK.MEASUREMENTS, "POSITION")
+        _append_measurement_once(self.config.TASK_CONFIG.TASK.MEASUREMENTS, "STEPS_TAKEN")
+        _append_measurement_once(self.config.TASK_CONFIG.TASK.MEASUREMENTS, "COLLISIONS")
         if self.config.VIDEO_OPTION:
-            self.config.TASK_CONFIG.TASK.MEASUREMENTS.append("TOP_DOWN_MAP_VLNCE")
-            self.config.TASK_CONFIG.TASK.MEASUREMENTS.append("DISTANCE_TO_GOAL")
-            self.config.TASK_CONFIG.TASK.MEASUREMENTS.append("SUCCESS")
-            self.config.TASK_CONFIG.TASK.MEASUREMENTS.append("SPL")
+            _append_measurement_once(self.config.TASK_CONFIG.TASK.MEASUREMENTS, "TOP_DOWN_MAP_VLNCE")
+            _append_measurement_once(self.config.TASK_CONFIG.TASK.MEASUREMENTS, "DISTANCE_TO_GOAL")
+            _append_measurement_once(self.config.TASK_CONFIG.TASK.MEASUREMENTS, "SUCCESS")
+            _append_measurement_once(self.config.TASK_CONFIG.TASK.MEASUREMENTS, "SPL")
             os.makedirs(self.config.VIDEO_DIR, exist_ok=True)
             shift = 0.
             orient_dict = {
@@ -556,6 +619,15 @@ class RLTrainer(BaseVLNCETrainer):
         self.config.freeze()
 
         if self.config.EVAL.SAVE_RESULTS:
+            os.makedirs(self.config.RESULTS_DIR, exist_ok=True)
+            probe_fname = os.path.join(
+                self.config.RESULTS_DIR,
+                f".eval_write_probe_r{self.local_rank}",
+            )
+            with open(probe_fname, "w") as f:
+                f.write("")
+            os.remove(probe_fname)
+
             fname = os.path.join(
                 self.config.RESULTS_DIR,
                 f"stats_ckpt_{checkpoint_index}_{self.config.TASK_CONFIG.DATASET.SPLIT}.json",
@@ -595,6 +667,8 @@ class RLTrainer(BaseVLNCETrainer):
         while len(self.stat_eps) < eps_to_eval:
             self.rollout('eval')
         self.envs.close()
+        if self.pbar is not None:
+            self.pbar.close()
 
         if self.world_size > 1:
             distr.barrier()
@@ -618,32 +692,46 @@ class RLTrainer(BaseVLNCETrainer):
                 aggregated_states[k] = v
         
         split = self.config.TASK_CONFIG.DATASET.SPLIT
-        fname = os.path.join(
-            self.config.RESULTS_DIR,
-            f"stats_ep_ckpt_{checkpoint_index}_{split}_r{self.local_rank}_w{self.world_size}.json",
-        )
-        with open(fname, "w") as f:
-            json.dump(self.stat_eps, f, indent=2)
 
         if self.local_rank < 1:
-            if self.config.EVAL.SAVE_RESULTS:
-                fname = os.path.join(
-                    self.config.RESULTS_DIR,
-                    f"stats_ckpt_{checkpoint_index}_{split}.json",
-                )
-                with open(fname, "w") as f:
-                    json.dump(aggregated_states, f, indent=2)
-
             logger.info(f"Episodes evaluated: {total}")
             checkpoint_num = checkpoint_index + 1
             for k, v in aggregated_states.items():
                 logger.info(f"Average episode {k}: {v:.6f}")
                 writer.add_scalar(f"eval_{k}/{split}", v, checkpoint_num)
 
+        try:
+            os.makedirs(self.config.RESULTS_DIR, exist_ok=True)
+            fname = os.path.join(
+                self.config.RESULTS_DIR,
+                f"stats_ep_ckpt_{checkpoint_index}_{split}_r{self.local_rank}_w{self.world_size}.json",
+            )
+            with open(fname, "w") as f:
+                json.dump(self.stat_eps, f, indent=2)
+
+            if self.local_rank < 1 and self.config.EVAL.SAVE_RESULTS:
+                fname = os.path.join(
+                    self.config.RESULTS_DIR,
+                    f"stats_ckpt_{checkpoint_index}_{split}.json",
+                )
+                with open(fname, "w") as f:
+                    json.dump(aggregated_states, f, indent=2)
+        except OSError as exc:
+            logger.warning(
+                "Failed to save eval results under %s: %s",
+                self.config.RESULTS_DIR,
+                exc,
+            )
+
     @torch.no_grad()
     def inference(self):
         checkpoint_path = self.config.INFERENCE.CKPT_PATH
         logger.info(f"checkpoint_path: {checkpoint_path}")
+        # 新增
+        self.world_size = self.config.GPU_NUMBERS
+        self.local_rank = self.config.local_rank
+        self.device_id = self.config.TORCH_GPU_ID
+
         self.config.defrost()
         self.config.IL.ckpt_to_load = checkpoint_path
         self.config.TASK_CONFIG.DATASET.SPLIT = self.config.INFERENCE.SPLIT
@@ -678,16 +766,27 @@ class RLTrainer(BaseVLNCETrainer):
         self.config.SENSORS = task_config.SIMULATOR.AGENT_0.SENSORS
         self.config.freeze()
 
-        torch.cuda.set_device(self.device)
-        self.world_size = self.config.GPU_NUMBERS
-        self.local_rank = self.config.local_rank
+        # 新加: 将 torch.device 与整数 GPU id 分开保存，兼容 batch_obs/DDP 两类接口。
+        self.device_id = self.config.TORCH_GPU_ID
+        
         if self.world_size > 1:
-            distr.init_process_group(backend='nccl', init_method='env://')
-            self.device = self.config.TORCH_GPU_IDS[self.local_rank]
+            # 1. 先精准算出当前进程真正该去哪张逻辑卡
+            self.device_id = self.config.TORCH_GPU_IDS[self.local_rank]
+            self.device = torch.device("cuda", self.device_id)
+            
+            # 2. 在拉起分布式通信前，先绑定正确的卡（PyTorch DDP 最佳实践）
             torch.cuda.set_device(self.device)
+            
+            # 3. 再拉起通信群组，这样 NCCL 就会在正确的卡上建 Context，绝不去碰 cuda:0
+            distr.init_process_group(backend='nccl', init_method='env://')
+            
             self.config.defrost()
-            self.config.TORCH_GPU_ID = self.config.TORCH_GPU_IDS[self.local_rank]
+            self.config.TORCH_GPU_ID = self.device_id
             self.config.freeze()
+        else:
+            # 单卡模式的兜底
+            self.device = torch.device("cuda", self.device_id)
+            torch.cuda.set_device(self.device)
         self.traj = self.collect_infer_traj()
 
         self.envs = construct_envs(
@@ -738,6 +837,9 @@ class RLTrainer(BaseVLNCETrainer):
             self.inst_ids = tmp_inst_dict
 
 
+        pred_dir = os.path.dirname(self.config.INFERENCE.PREDICTIONS_FILE) or "."
+        os.makedirs(pred_dir, exist_ok=True)
+
         if self.config.MODEL.task_type == "r2r":
             with open(self.config.INFERENCE.PREDICTIONS_FILE, "w") as f:
                 json.dump(self.path_eps, f, indent=2)
@@ -777,6 +879,10 @@ class RLTrainer(BaseVLNCETrainer):
                                                   max_length=instr_max_len, pad_id=instr_pad_id)
         batch = batch_obs(observations, self.device)
         batch = apply_obs_transforms_batch(batch, self.obs_transforms)
+        # 新加: PyTorch 2.8 的 batch_obs 在 inference_mode 下返回 inference tensor，
+        # 不能直接参与反向传播 (RuntimeError: Inference tensors cannot be saved for backward).
+        # 统一 clone 整个 batch 使其变为普通 tensor。
+        batch = {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         
         if mode == 'eval':
             env_to_pause = [i for i, ep in enumerate(self.envs.current_episodes()) 
@@ -809,6 +915,7 @@ class RLTrainer(BaseVLNCETrainer):
         not_done_index = list(range(self.envs.num_envs))
 
         have_real_pos = (mode == 'train' or self.config.VIDEO_OPTION)
+        # have_real_pos = False
         ghost_aug = self.config.IL.ghost_aug if mode == 'train' else 0
         self.gmaps = [GraphMap(have_real_pos, 
                                self.config.IL.loc_noise, 
@@ -850,13 +957,16 @@ class RLTrainer(BaseVLNCETrainer):
                 cand_pos.append(cand_pos_i)
             
             if mode == 'train' or self.config.VIDEO_OPTION:
-                cand_real_pos = []
-                for i in range(self.envs.num_envs):
-                    cand_real_pos_i = [
-                        self.envs.call_at(i, "get_cand_real_pos", {"angle": ang, "forward": dis})
-                        for ang, dis in zip(wp_outputs['cand_angles'][i], wp_outputs['cand_distances'][i])
-                    ]
-                    cand_real_pos.append(cand_real_pos_i)
+                cand_real_pos = self.envs.call(
+                    ["get_cand_real_pos_batch"] * self.envs.num_envs,
+                    [
+                        {
+                            "angles": [float(ang) for ang in wp_outputs['cand_angles'][i]],
+                            "forwards": [float(dis) for dis in wp_outputs['cand_distances'][i]],
+                        }
+                        for i in range(self.envs.num_envs)
+                    ],
+                )
             else:
                 cand_real_pos = [None] * self.envs.num_envs
 
@@ -979,6 +1089,17 @@ class RLTrainer(BaseVLNCETrainer):
             outputs = self.envs.step(env_actions)
             observations, _, dones, infos = [list(x) for x in zip(*outputs)]
 
+            # 新加: 首次 step 后检查 observations 是否包含全部传感器 key，
+            # 排查 get_observation_at 是否只返回了默认 2 个传感器。
+            if stepk == 0 and not hasattr(self, '_obs_key_checked'):
+                self._obs_key_checked = True
+                for oi, ob in enumerate(observations):
+                    if ob is not None:
+                        depth_cnt = sum(1 for k in ob if 'depth' in k)
+                        logger.info(f"[OBS-STEP] env={oi} obs_keys={len(ob)} "
+                                    f"depth_keys={depth_cnt} keys={sorted(ob.keys())}")
+                        break
+
             # calculate metric
             if mode == 'eval':
                 curr_eps = self.envs.current_episodes()
@@ -987,7 +1108,7 @@ class RLTrainer(BaseVLNCETrainer):
                         continue
                     info = infos[i]
                     ep_id = curr_eps[i].episode_id
-                    gt_path = np.array(self.gt_data[str(ep_id)]['locations']).astype(np.float)
+                    gt_path = np.array(self.gt_data[str(ep_id)]['locations']).astype(np.float32)
                     pred_path = np.array(info['position']['position'])
                     distances = np.array(info['position']['distance'])
                     metric = {}
@@ -1004,7 +1125,54 @@ class RLTrainer(BaseVLNCETrainer):
                     metric['sdtw'] = metric['ndtw'] * metric['success']
                     metric['ghost_cnt'] = self.gmaps[i].ghost_cnt
                     self.stat_eps[ep_id] = metric
-                    self.pbar.update()
+                    evaluated_eps = len(self.stat_eps)
+                    eval_total = (
+                        int(self.pbar.total)
+                        if self.pbar is not None and self.pbar.total is not None
+                        else evaluated_eps
+                    )
+                    running_means = {
+                        "success": sum(v["success"] for v in self.stat_eps.values()) / evaluated_eps,
+                        "spl": sum(v["spl"] for v in self.stat_eps.values()) / evaluated_eps,
+                        "ndtw": sum(v["ndtw"] for v in self.stat_eps.values()) / evaluated_eps,
+                        "sdtw": sum(v["sdtw"] for v in self.stat_eps.values()) / evaluated_eps,
+                        "distance_to_goal": sum(v["distance_to_goal"] for v in self.stat_eps.values()) / evaluated_eps,
+                    }
+                    if self.pbar is not None and self.local_rank < 1:
+                        self.pbar.set_postfix({
+                            "ep": f"{evaluated_eps}/{eval_total}",
+                            "succ": f"{running_means['success']:.3f}",
+                            "spl": f"{running_means['spl']:.3f}",
+                            "ndtw": f"{running_means['ndtw']:.3f}",
+                            "sdtw": f"{running_means['sdtw']:.3f}",
+                        })
+                    logger.info(
+                        f"[EP-DONE] ep={ep_id} | succ={metric['success']:.0f} "
+                        f"oracle={metric['oracle_success']:.0f} | "
+                        f"d2g={metric['distance_to_goal']:.2f} "
+                        f"steps={metric['steps_taken']} "
+                        f"path_len={metric['path_length']:.2f} "
+                        f"gt_len={gt_length:.2f} | "
+                        f"spl={metric['spl']:.3f} ndtw={metric['ndtw']:.3f} sdtw={metric['sdtw']:.3f} "
+                        f"ghost={metric['ghost_cnt']} "
+                        f"min_dist={distances.min():.2f}"
+                    )
+                    log_every_episode = max(int(getattr(self.config.EVAL, "LOG_EVERY_EPISODE", 1)), 1)
+                    if self.local_rank < 1 and (
+                        evaluated_eps == 1
+                        or evaluated_eps % log_every_episode == 0
+                        or evaluated_eps == eval_total
+                    ):
+                        logger.info(
+                            f"[EVAL-LIVE] ep={evaluated_eps}/{eval_total} | "
+                            f"success={running_means['success']:.3f} "
+                            f"spl={running_means['spl']:.3f} "
+                            f"ndtw={running_means['ndtw']:.3f} "
+                            f"sdtw={running_means['sdtw']:.3f} "
+                            f"d2g={running_means['distance_to_goal']:.3f}"
+                        )
+                    if self.pbar is not None:
+                        self.pbar.update()
 
             # record path
             if mode == 'infer':
@@ -1050,6 +1218,8 @@ class RLTrainer(BaseVLNCETrainer):
             observations = extract_instruction_tokens(observations,self.config.TASK_CONFIG.TASK.INSTRUCTION_SENSOR_UUID)
             batch = batch_obs(observations, self.device)
             batch = apply_obs_transforms_batch(batch, self.obs_transforms)
+            # 新加: 同上，clone 以退出 inference mode
+            batch = {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
         if mode == 'train':
             loss = ml_weight * loss / total_actions

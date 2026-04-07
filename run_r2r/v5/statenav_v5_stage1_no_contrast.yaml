@@ -1,0 +1,145 @@
+BASE_TASK_CONFIG_PATH: run_r2r/r2r_vlnce.yaml
+SIMULATOR_GPU_IDS: [0]
+TORCH_GPU_ID: 0
+TORCH_GPU_IDS: [0]
+TRAINER_NAME: StateNavV5Stage1
+GPU_NUMBERS: 1
+NUM_ENVIRONMENTS: 8
+TENSORBOARD_DIR: data/logs/tensorboard_dirs/
+CHECKPOINT_FOLDER: data/logs/checkpoints/
+EVAL_CKPT_PATH_DIR: data/logs/checkpoints/
+RESULTS_DIR: data/logs/eval_results/
+VIDEO_DIR: data/logs/video/
+
+INFERENCE:
+  SPLIT: test
+  USE_CKPT_CONFIG: False
+  SAMPLE: False
+  CKPT_PATH: ''
+  PREDICTIONS_FILE: ''
+  FORMAT: r2r
+  EPISODE_COUNT: -1
+
+EVAL:
+  USE_CKPT_CONFIG: False
+  SPLIT: val_unseen
+  EPISODE_COUNT: -1
+  LOG_EVERY_EPISODE: 1
+  CKPT_PATH_DIR: ''
+  fast_eval: False
+
+IL:
+  iters: 15000
+  log_every: 200
+  lr: 1.0e-5
+  batch_size: 4
+  ml_weight: 1.0
+  expert_policy: spl
+  load_from_ckpt: True
+  ckpt_to_load: data/logs/checkpoints/release_r2r/ckpt.iter12000.pth
+  is_requeue: False
+  sample_ratio: 0.75
+  decay_interval: 3000
+  max_traj_len: 15
+  max_text_len: 80
+  loc_noise: 0.5
+  waypoint_aug: False
+  ghost_aug: 0.0
+  back_algo: teleport
+  tryout: True
+
+MODEL:
+  task_type: r2r
+  policy_name: PolicyViewSelectionETP
+  NUM_ANGLES: 12
+  pretrained_path: pretrained/ETP/mlm.sap_r2r/ckpts/model_step_82500.pt
+  fix_lang_embedding: False
+  fix_pano_embedding: False
+  use_depth_embedding: True
+  use_sprels: True
+  merge_ghost: True
+  consume_ghost: True
+  spatial_output: False
+  RGB_ENCODER:
+    output_size: 512
+  DEPTH_ENCODER:
+    output_size: 256
+  VISUAL_DIM:
+    vis_hidden: 768
+    directional: 128
+  INSTRUCTION_ENCODER:
+    bidirectional: True
+
+STATENAV:
+  hidden_dim: 512
+  action_dim: 512
+  latent_groups: 16
+  latent_classes: 16
+  chunk_len: 16
+  lambda_kl: 0.1
+  lambda_curve: 1.0
+  lambda_contrast: 0.0
+  lambda_attn: 0.05
+  lambda_relation_aux: 0.1
+  lambda_health_entropy: 0.01
+  lambda_health: 0.1
+  lambda_attn_health: 0.25
+  adapter_warmup_steps: 2000
+  use_reality_calibration: True
+  decision_mode: relational_self_model
+  decision_beta_d: 1.0
+  progress_curve_horizon: 5
+  progress_curve_hidden_dim: 256
+  progress_curve_smooth_window: 3
+  relation_dim: 512
+  dt_low_percentile: 0.75
+  dt_high_percentile: 0.95
+  dt_threshold_ema: 0.95
+  attn_warmup_steps: 2000
+  high_level_backtrack_bias: 5.0
+  enable_level2_frontier: True
+  enable_level3_macro: True
+  level3_policy: backtrack_first
+  backtrack_history_size: 8
+  backtrack_recency_bias: 0.05
+  use_relation_state_extractor: True
+  use_attention_transition: True
+  use_open_eye_rollout: True
+  contrast_margin: 0.1
+  gumbel_temp: 1.0
+  hard_gumbel: True
+  free_bits: 0.0
+  kl_warmup_steps: 2000
+  grad_clip_norm: 5.0
+  max_keep_checkpoints: 3
+  stage2_etp_lr_scale: 0.1
+  LOGGING:
+    use_tqdm: True
+    step_log_every: 1
+    write_step_metrics: True
+    step_metrics_filename: step_metrics.tsv
+    log_full_model_report_to_runtime: False
+    save_best_by_train_loss: False
+    log_prior_post_metrics: True
+    log_prior_post_eval: True
+    save_v4_episode_traces: True
+    v4_trace_dirname: v5_traces
+    v4_trace_max_episodes: 20
+    v4_trace_topk: 5
+  stage2_unfreeze_keywords:
+    - global_sap_head
+    - global_encoder.encoder.x_layers
+  LABEL_BUILDER:
+    state_bins: 10
+    prefix_radius: 3.0
+    local_window: 1
+    deviation_threshold: 3.0
+    off_path_threshold: 4.5
+    heading_threshold_rad: 1.0471975512
+    repeated_window: 6
+    repeated_ratio_threshold: 0.5
+    candidate_instability_window: 4
+    candidate_instability_threshold: 0.75
+    recovery_tolerance_steps: 1
+    max_prefix_backtrack: 1
+    min_valid_conditions: 3

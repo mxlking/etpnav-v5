@@ -1,0 +1,2 @@
+from vlnce_baselines.trainers.train_statenav_stage1 import StateNavStage1Trainer
+from vlnce_baselines.trainers.train_statenav_stage2 import StateNavStage2Trainer

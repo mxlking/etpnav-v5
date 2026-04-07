@@ -1,6 +1,2 @@
-from vlnce_baselines import ss_trainer_ETP, dagger_trainer
-from vlnce_baselines.common import environments
-
-from vlnce_baselines.models import (
-    Policy_ViewSelection_ETP,
-)
+from vlnce_baselines.trainers.train_statenav_v5_stage1 import StateNavV5Stage1Trainer  # noqa: F401
+from vlnce_baselines.trainers.train_statenav_v5_stage2 import StateNavV5Stage2Trainer  # noqa: F401

@@ -10,7 +10,24 @@ from habitat_baselines.common.baseline_registry import baseline_registry
 
 import habitat_extensions  # noqa: F401
 import vlnce_baselines  # noqa: F401
+from vlnce_baselines.models.Policy_ViewSelection_ETP import PolicyViewSelectionETP  # noqa: F401
+from vlnce_baselines.trainers.train_statenav_v5_stage1 import StateNavV5Stage1Trainer  # noqa: F401
+from vlnce_baselines.trainers.train_statenav_v5_stage2 import StateNavV5Stage2Trainer  # noqa: F401
 from vlnce_baselines.config.default import get_config
+
+
+def _ensure_dir_writable(path: str, label: str, probe_tag: str = "") -> None:
+    os.makedirs(path, exist_ok=True)
+    probe_name = f".write_probe_{label}_{probe_tag or os.getpid()}"
+    probe_path = os.path.join(path, probe_name)
+    with open(probe_path, "w", encoding="utf-8") as f:
+        f.write("")
+    os.remove(probe_path)
+
+
+def _ensure_parent_dir_writable(file_path: str, label: str, probe_tag: str = "") -> None:
+    parent = os.path.dirname(file_path) or "."
+    _ensure_dir_writable(parent, label, probe_tag=probe_tag)
 # from vlnce_baselines.nonlearning_agents import (
 #     evaluate_agent,
 #     nonlearning_inference,
@@ -44,8 +61,19 @@ def main():
         nargs=argparse.REMAINDER,
         help="Modify config options from command line",
     )
-    parser.add_argument('--local_rank', type=int, default=0, help="local gpu id")
+    # 新加: 同时兼容 torch.distributed.launch 旧参数 --local_rank 和新参数 --local-rank。
+    parser.add_argument(
+        "--local_rank",
+        "--local-rank",
+        dest="local_rank",
+        type=int,
+        default=None,
+        help="local gpu id",
+    )
     args = parser.parse_args()
+    # 新加: 当 launch 使用 --use-env / LOCAL_RANK 时，从环境变量兜底读取。
+    if args.local_rank is None:
+        args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
     run_exp(**vars(args))
 
 
@@ -76,10 +104,32 @@ def run_exp(exp_name: str, exp_config: str,
     if 'CMA' in config.MODEL.policy_name and 'r2r' in config.BASE_TASK_CONFIG_PATH:
         config.TASK_CONFIG.DATASET.DATA_PATH = 'data/datasets/R2R_VLNCE_v1-2_preprocessed/{split}/{split}.json.gz'
 
+    probe_tag = f"rank{local_rank if local_rank is not None else 0}_{os.getpid()}"
+    _ensure_dir_writable(config.TENSORBOARD_DIR, "tensorboard", probe_tag=probe_tag)
+    _ensure_dir_writable(config.CHECKPOINT_FOLDER, "checkpoint", probe_tag=probe_tag)
+    _ensure_dir_writable(config.RESULTS_DIR, "results", probe_tag=probe_tag)
+    _ensure_dir_writable(config.VIDEO_DIR, "video", probe_tag=probe_tag)
+    if run_type == "inference":
+        _ensure_parent_dir_writable(
+            config.INFERENCE.PREDICTIONS_FILE,
+            "inference_predictions",
+            probe_tag=probe_tag,
+        )
+
     config.local_rank = local_rank
     config.freeze()
-    os.system("mkdir -p data/logs/running_log")
-    logger.add_filehandler('data/logs/running_log/'+config.LOG_FILE)
+    runtime_log_dir = os.environ.get("RUNTIME_LOG_DIR", "data/logs/running_log")
+    _ensure_dir_writable(runtime_log_dir, "runtime_log", probe_tag=probe_tag)
+    base_log_path = os.path.join(runtime_log_dir, config.LOG_FILE)
+    if local_rank is None or local_rank == 0:
+        log_path = base_log_path
+    else:
+        stem, ext = os.path.splitext(base_log_path)
+        log_path = f"{stem}.rank{local_rank}{ext or '.log'}"
+    logger.add_filehandler(log_path)
+
+    if local_rank is None or local_rank == 0:
+        logger.info("Runtime log file: %s", log_path)
 
     random.seed(config.TASK_CONFIG.SEED)
     np.random.seed(config.TASK_CONFIG.SEED)

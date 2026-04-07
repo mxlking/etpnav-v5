@@ -10,6 +10,31 @@ __pycache__/
 *.swp
 *.png
 *.zip
+.pytest_cache/
+
+# Runtime logs / outputs
+logs/
+data/logs/
+exports/
+tmp_eval_ckpt_600/
+*.log
+*.out
+*.err
+
+# Model artifacts / checkpoints
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.npy
+*.npz
+
+# Temporary / backup files
+*.bak
+* copy.*
+* copy
+install.log
+get-pip.py
 
 /data
 /logs

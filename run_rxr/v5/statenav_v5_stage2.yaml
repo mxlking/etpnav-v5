@@ -1,0 +1,151 @@
+BASE_TASK_CONFIG_PATH: run_rxr/rxr_vlnce.yaml
+SIMULATOR_GPU_IDS: [0]
+TORCH_GPU_ID: 0
+TORCH_GPU_IDS: [0]
+TRAINER_NAME: StateNavV5Stage2
+GPU_NUMBERS: 1
+NUM_ENVIRONMENTS: 1
+TENSORBOARD_DIR: data/logs/tensorboard_dirs/
+CHECKPOINT_FOLDER: data/logs/checkpoints/
+EVAL_CKPT_PATH_DIR: data/logs/checkpoints/
+RESULTS_DIR: data/logs/eval_results/
+VIDEO_DIR: data/logs/video/
+
+INFERENCE:
+  SPLIT: test_challenge
+  LANGUAGES: ['*']
+  USE_CKPT_CONFIG: False
+  SAMPLE: False
+  CKPT_PATH: ''
+  PREDICTIONS_FILE: ''
+  FORMAT: rxr
+  EPISODE_COUNT: -1
+
+EVAL:
+  USE_CKPT_CONFIG: False
+  SPLIT: val_unseen
+  LANGUAGES: ['*']
+  EPISODE_COUNT: -1
+  CKPT_PATH_DIR: ''
+  fast_eval: False
+
+IL:
+  iters: 8000
+  log_every: 200
+  lr: 5.0e-6
+  batch_size: 1
+  ml_weight: 1.0
+  expert_policy: ndtw
+  load_from_ckpt: True
+  ckpt_to_load: ''
+  is_requeue: False
+  sample_ratio: 0.75
+  decay_interval: 3000
+  max_traj_len: 25
+  max_text_len: 200
+  loc_noise: 0.5
+  waypoint_aug: False
+  ghost_aug: 0.0
+  back_algo: teleport
+  tryout: True
+
+MODEL:
+  task_type: rxr
+  policy_name: PolicyViewSelectionETP
+  NUM_ANGLES: 12
+  pretrained_path: pretrained/ETP/mlm.sap_rxr/ckpts/model_step_90000.pt
+  fix_lang_embedding: False
+  fix_pano_embedding: False
+  use_depth_embedding: True
+  use_sprels: True
+  merge_ghost: True
+  consume_ghost: True
+  spatial_output: False
+  RGB_ENCODER:
+    output_size: 512
+  DEPTH_ENCODER:
+    output_size: 256
+  VISUAL_DIM:
+    vis_hidden: 768
+    directional: 128
+  INSTRUCTION_ENCODER:
+    bidirectional: True
+    sensor_uuid: rxr_instruction
+    embedding_size: 768
+
+STATENAV:
+  hidden_dim: 512
+  action_dim: 512
+  latent_groups: 16
+  latent_classes: 16
+  chunk_len: 16
+  lambda_kl: 0.1
+  lambda_curve: 1.0
+  lambda_attn: 0.05
+  lambda_health: 0.1
+  lambda_curve_health: 1.0
+  lambda_attn_health: 0.25
+  adapter_warmup_steps: 2000
+  use_reality_calibration: True
+  decision_mode: relational_self_model
+  decision_beta_d: 1.0
+  progress_curve_horizon: 5
+  progress_curve_hidden_dim: 256
+  progress_curve_smooth_window: 3
+  relation_dim: 512
+  dt_low_percentile: 0.75
+  dt_high_percentile: 0.95
+  dt_threshold_ema: 0.95
+  high_level_backtrack_bias: 5.0
+  enable_level2_frontier: True
+  # 当前主线默认关闭 Level-3；诊断矩阵会显式重新打开它做对照。
+  enable_level3_macro: False
+  level3_policy: energy_recovery
+  level3_min_step: 3
+  level3_min_dnorm: 1.0
+  level3_switch_margin: 0.0
+  level3_allow_stop: False
+  level3_stop_margin: 0.0
+  backtrack_history_size: 8
+  backtrack_recency_bias: 0.05
+  use_relation_state_extractor: True
+  use_attention_transition: True
+  use_open_eye_rollout: True
+  attn_warmup_steps: 2000
+  gumbel_temp: 1.0
+  hard_gumbel: True
+  free_bits: 0.0
+  kl_warmup_steps: 2000
+  grad_clip_norm: 5.0
+  max_keep_checkpoints: 3
+  stage2_etp_lr_scale: 0.1
+  LOGGING:
+    use_tqdm: True
+    step_log_every: 1
+    write_step_metrics: True
+    step_metrics_filename: step_metrics.tsv
+    log_full_model_report_to_runtime: False
+    save_best_by_train_loss: False
+    log_prior_post_metrics: True
+    log_prior_post_eval: True
+    save_v5_episode_traces: True
+    v5_trace_dirname: v5_traces
+    v5_trace_max_episodes: 20
+    v5_trace_topk: 5
+  stage2_unfreeze_keywords:
+    - global_sap_head
+    - global_encoder.encoder.x_layers
+  LABEL_BUILDER:
+    state_bins: 10
+    prefix_radius: 3.0
+    local_window: 1
+    deviation_threshold: 3.0
+    off_path_threshold: 4.5
+    heading_threshold_rad: 1.0471975512
+    repeated_window: 6
+    repeated_ratio_threshold: 0.5
+    candidate_instability_window: 4
+    candidate_instability_threshold: 0.75
+    recovery_tolerance_steps: 1
+    max_prefix_backtrack: 1
+    min_valid_conditions: 3

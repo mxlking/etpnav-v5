@@ -17,9 +17,44 @@ import math
 from copy import deepcopy
 
 import tqdm
+import cv2
+import numpy as np
 from gym import Space
-from habitat import Config, logger
-from habitat.utils.visualizations.utils import append_text_to_image
+from vlnce_baselines.utils import load_torch_checkpoint_compat
+try:
+    from habitat import Config, logger
+except Exception:
+    from vlnce_baselines.config.shim_config import Config
+    import logging
+    logger = logging.getLogger(__name__)
+try:
+    from habitat.utils.visualizations.utils import append_text_to_image
+except ImportError:
+    # 新加: 兼容新版 Habitat 移除了 append_text_to_image 的情况。
+    def append_text_to_image(image, text):
+        if image.ndim == 2:
+            image = np.repeat(image[..., None], 3, axis=2)
+        if image.shape[-1] > 3:
+            image = image[..., :3]
+
+        banner_height = 36
+        canvas = np.full(
+            (image.shape[0] + banner_height, image.shape[1], 3),
+            255,
+            dtype=image.dtype,
+        )
+        canvas[: image.shape[0]] = image
+        cv2.putText(
+            canvas,
+            str(text),
+            (8, image.shape[0] + 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 0, 0),
+            1,
+            cv2.LINE_AA,
+        )
+        return canvas
 from habitat_baselines.common.base_il_trainer import BaseILTrainer
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.environments import get_env_class
@@ -55,7 +90,11 @@ from ..utils import (
 
 with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=FutureWarning)
-    import tensorflow as tf  # noqa: F401
+    try:
+        import tensorflow as tf  # noqa: F401
+    except ImportError:
+        # 新加: eval 路径下 tensorflow 不是硬依赖，缺失时允许继续启动。
+        tf = None
 
 
 class BaseVLNCETrainer(BaseILTrainer):
@@ -65,6 +104,8 @@ class BaseVLNCETrainer(BaseILTrainer):
     def __init__(self, config=None):
         super().__init__(config)
         self.policy = None
+        # 新加: 同时保留整数 GPU id，供 DDP/device_ids 等接口使用。
+        self.device_id = self.config.TORCH_GPU_ID
         self.device = (
             torch.device("cuda", self.config.TORCH_GPU_ID)
             if torch.cuda.is_available()
@@ -91,7 +132,7 @@ class BaseVLNCETrainer(BaseILTrainer):
         from vlnce_baselines.waypoint_pred.TRM_net import BinaryDistPredictor_TRM
         self.waypoint_predictor = BinaryDistPredictor_TRM(device=self.device)
         self.waypoint_predictor.load_state_dict(
-            torch.load(
+            load_torch_checkpoint_compat(
                 'data/wp_pred/check_val_best_avg_wayscore',
                 map_location = torch.device('cpu'),
             )['predictor']['state_dict']
@@ -163,7 +204,8 @@ class BaseVLNCETrainer(BaseILTrainer):
     #     )
 
     def load_checkpoint(self, checkpoint_path, *args, **kwargs) -> Dict:
-        return torch.load(checkpoint_path, *args, **kwargs)
+        # 新加: 统一兼容旧 checkpoint 在新 PyTorch 下的加载行为。
+        return load_torch_checkpoint_compat(checkpoint_path, *args, **kwargs)
 
     # def _update_agent(
     #     self,
@@ -303,6 +345,15 @@ class BaseVLNCETrainer(BaseILTrainer):
         config.freeze()
 
         if config.EVAL.SAVE_RESULTS:
+            os.makedirs(config.RESULTS_DIR, exist_ok=True)
+            probe_fname = os.path.join(
+                config.RESULTS_DIR,
+                f".eval_write_probe_r{self.local_rank}",
+            )
+            with open(probe_fname, "w") as f:
+                f.write("")
+            os.remove(probe_fname)
+
             fname = os.path.join(
                 config.RESULTS_DIR,
                 f"stats_ckpt_{checkpoint_index}_{config.TASK_CONFIG.DATASET.SPLIT}.json",
@@ -528,14 +579,14 @@ class BaseVLNCETrainer(BaseILTrainer):
                 metric = {}
                 metric['steps_taken'] = info['steps_taken']
                 ep_id = str(envs.current_episodes()[i].episode_id)
-                gt_path = np.array(self.gt_data[ep_id]['locations']).astype(np.float)
+                gt_path = np.array(self.gt_data[ep_id]['locations']).astype(np.float32)
                 if 'current_path' in envs.current_episodes()[i].info.keys():
-                    positions_ = np.array(envs.current_episodes()[i].info['current_path']).astype(np.float)
+                    positions_ = np.array(envs.current_episodes()[i].info['current_path']).astype(np.float32)
                     collisions_ = np.array(envs.current_episodes()[i].info['collisions'])
                     assert collisions_.shape[0] == positions_.shape[0] - 1
                 else:
-                    positions_ = np.array(dis_to_con(np.array(info['position']['position']))).astype(np.float)
-                distance = np.array(info['position']['distance']).astype(np.float)
+                    positions_ = np.array(dis_to_con(np.array(info['position']['position']))).astype(np.float32)
+                distance = np.array(info['position']['distance']).astype(np.float32)
                 metric['distance_to_goal'] = distance[-1]
                 metric['success'] = 1. if distance[-1] <= 3. and env_actions[i]['action']['action'] == 0 else 0.
                 metric['oracle_success'] = 1. if (distance <= 3.).any() else 0.
@@ -550,12 +601,54 @@ class BaseVLNCETrainer(BaseILTrainer):
                 metric['spl'] = metric['success']*gt_length/max(gt_length,metric['path_length'])
 
                 act_con_path = positions_
-                gt_con_path = np.array(dis_to_con(gt_path)).astype(np.float)
+                gt_con_path = np.array(dis_to_con(gt_path)).astype(np.float32)
                 dtw_distance = fastdtw(act_con_path, gt_con_path, dist=NDTW.euclidean_distance)[0]
                 nDTW = np.exp(-dtw_distance / (len(gt_con_path) * config.TASK_CONFIG.TASK.SUCCESS_DISTANCE))
 
                 metric['ndtw'] = nDTW
+                metric['sdtw'] = nDTW * metric['success']
                 stats_episodes[current_episodes[i].episode_id] = metric
+
+                evaluated_eps = len(stats_episodes)
+                running_means = {
+                    "success": sum(v["success"] for v in stats_episodes.values()) / evaluated_eps,
+                    "spl": sum(v["spl"] for v in stats_episodes.values()) / evaluated_eps,
+                    "ndtw": sum(v["ndtw"] for v in stats_episodes.values()) / evaluated_eps,
+                    "sdtw": sum(v["sdtw"] for v in stats_episodes.values()) / evaluated_eps,
+                    "distance_to_goal": sum(v["distance_to_goal"] for v in stats_episodes.values()) / evaluated_eps,
+                }
+                if config.use_pbar and self.local_rank < 1:
+                    pbar.set_postfix({
+                        "ep": f"{evaluated_eps}/{episodes_to_eval}",
+                        "succ": f"{running_means['success']:.3f}",
+                        "spl": f"{running_means['spl']:.3f}",
+                        "ndtw": f"{running_means['ndtw']:.3f}",
+                        "sdtw": f"{running_means['sdtw']:.3f}",
+                    })
+                logger.info(
+                    f"[EP-DONE] ep={ep_id} | succ={metric['success']:.0f} "
+                    f"oracle={metric['oracle_success']:.0f} | "
+                    f"d2g={metric['distance_to_goal']:.2f} "
+                    f"steps={metric['steps_taken']} "
+                    f"path_len={metric['path_length']:.2f} "
+                    f"gt_len={gt_length:.2f} | "
+                    f"spl={metric['spl']:.3f} ndtw={metric['ndtw']:.3f} sdtw={metric['sdtw']:.3f} "
+                    f"collisions={metric['collisions']:.3f}"
+                )
+                log_every_episode = max(int(getattr(config.EVAL, "LOG_EVERY_EPISODE", 1)), 1)
+                if self.local_rank < 1 and (
+                    evaluated_eps == 1
+                    or evaluated_eps % log_every_episode == 0
+                    or evaluated_eps == episodes_to_eval
+                ):
+                    logger.info(
+                        f"[EVAL-LIVE] ep={evaluated_eps}/{episodes_to_eval} | "
+                        f"success={running_means['success']:.3f} "
+                        f"spl={running_means['spl']:.3f} "
+                        f"ndtw={running_means['ndtw']:.3f} "
+                        f"sdtw={running_means['sdtw']:.3f} "
+                        f"d2g={running_means['distance_to_goal']:.3f}"
+                    )
 
                 observations[i] = envs.reset_at(i)[0] # envs[i] change to next episode
                 
@@ -671,27 +764,36 @@ class BaseVLNCETrainer(BaseILTrainer):
                 aggregated_stats[k] = v
 
         split = config.TASK_CONFIG.DATASET.SPLIT
-        fname = os.path.join(
-            config.RESULTS_DIR,
-            f"stats_ep_ckpt_{checkpoint_index}_{split}_r{self.local_rank}_w{self.world_size}.json",
-        )
-        with open(fname, "w") as f:
-            json.dump(stats_episodes, f, indent=4)
 
         if self.local_rank < 1:
-            if config.EVAL.SAVE_RESULTS:
+            logger.info(f"Episodes evaluated: {total}")
+            checkpoint_num = checkpoint_index + 1
+            for k, v in aggregated_stats.items():
+                logger.info(f"Average episode {k}: {v:.6f}")
+                writer.add_scalar(f"eval_{k}/{split}", v, checkpoint_num)
+
+        try:
+            os.makedirs(config.RESULTS_DIR, exist_ok=True)
+            fname = os.path.join(
+                config.RESULTS_DIR,
+                f"stats_ep_ckpt_{checkpoint_index}_{split}_r{self.local_rank}_w{self.world_size}.json",
+            )
+            with open(fname, "w") as f:
+                json.dump(stats_episodes, f, indent=4)
+
+            if self.local_rank < 1 and config.EVAL.SAVE_RESULTS:
                 fname = os.path.join(
                     config.RESULTS_DIR,
                     f"stats_ckpt_{checkpoint_index}_{split}.json",
                 )
                 with open(fname, "w") as f:
                     json.dump(aggregated_stats, f, indent=4)
-
-            logger.info(f"Episodes evaluated: {total}")
-            checkpoint_num = checkpoint_index + 1
-            for k, v in aggregated_stats.items():
-                logger.info(f"Average episode {k}: {v:.6f}")
-                writer.add_scalar(f"eval_{k}/{split}", v, checkpoint_num)
+        except OSError as exc:
+            logger.warning(
+                "Failed to save eval results under %s: %s",
+                config.RESULTS_DIR,
+                exc,
+            )
 
     def collect_infer_traj(self):
         from habitat_extensions.task import ALL_ROLES_MASK, RxRVLNCEDatasetV1
@@ -842,14 +944,27 @@ class BaseVLNCETrainer(BaseILTrainer):
         self.config.SENSORS = config.SIMULATOR.AGENT_0.SENSORS
         
         self.config.freeze()
-        torch.cuda.set_device(self.device)
+        # 新加: 将 torch.device 与整数 GPU id 分开保存，兼容 batch_obs/DDP 两类接口。
+        self.device_id = self.config.TORCH_GPU_ID
+        
         if world_size > 1:
-            distr.init_process_group(backend='nccl', init_method='env://')
-            self.device = self.config.TORCH_GPU_IDS[self.local_rank]
+            # 1. 先精准算出当前进程真正该去哪张逻辑卡
+            self.device_id = self.config.TORCH_GPU_IDS[self.local_rank]
+            self.device = torch.device("cuda", self.device_id)
+            
+            # 2. 在拉起分布式通信前，先绑定正确的卡（PyTorch DDP 最佳实践）
             torch.cuda.set_device(self.device)
+            
+            # 3. 再拉起通信群组，这样 NCCL 就会在正确的卡上建 Context，绝不去碰 cuda:0
+            distr.init_process_group(backend='nccl', init_method='env://')
+            
             self.config.defrost()
-            self.config.TORCH_GPU_ID = self.config.TORCH_GPU_IDS[self.local_rank]
+            self.config.TORCH_GPU_ID = self.device_id
             self.config.freeze()
+        else:
+            # 单卡模式的兜底
+            self.device = torch.device("cuda", self.device_id)
+            torch.cuda.set_device(self.device)
         self.traj = self.collect_val_traj()
         
         with TensorboardWriter(
@@ -889,10 +1004,29 @@ class BaseVLNCETrainer(BaseILTrainer):
                     )
 
     def get_ckpt_id(self, ckpt_path):
-        ckpt_path = os.path.basename(ckpt_path)
-        ckpt_id = ckpt_path.split('.')[1].replace('iter', '')
-        ckpt_id = int(ckpt_id) // self.config.IL.log_every - 1
-        return ckpt_id
+        ckpt_name = os.path.basename(ckpt_path)
+        stem, _ = os.path.splitext(ckpt_name)
+        raw_iteration = None
+
+        if "." in stem:
+            suffix = stem.split(".")[-1]
+            if suffix.startswith("iter") and suffix.replace("iter", "", 1).isdigit():
+                raw_iteration = int(suffix.replace("iter", "", 1))
+
+        if raw_iteration is None:
+            try:
+                ckpt = load_torch_checkpoint_compat(ckpt_path, map_location="cpu")
+                raw_iteration = int(ckpt.get("iteration", 0))
+            except Exception as exc:
+                logger.warning(
+                    "Unable to infer checkpoint iteration from %s: %s. Fallback to checkpoint_index=0.",
+                    ckpt_path,
+                    exc,
+                )
+                raw_iteration = 0
+
+        ckpt_id = raw_iteration // self.config.IL.log_every - 1
+        return max(int(ckpt_id), 0)
 
     def inference(self) -> None:
         r"""Runs inference on a single checkpoint, creating a path predictions file."""
@@ -1167,6 +1301,9 @@ class BaseVLNCETrainer(BaseILTrainer):
                     h_t = rnn_states
 
         envs.close()
+
+        pred_dir = os.path.dirname(config.INFERENCE.PREDICTIONS_FILE) or "."
+        os.makedirs(pred_dir, exist_ok=True)
 
         if config.INFERENCE.FORMAT == "r2r":
             with open(config.INFERENCE.PREDICTIONS_FILE, "w") as f:

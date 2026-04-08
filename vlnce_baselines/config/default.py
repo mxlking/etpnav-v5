@@ -258,6 +258,17 @@ _C.STATENAV.backtrack_recency_bias = 0.05
 _C.STATENAV.use_relation_state_extractor = True
 _C.STATENAV.use_attention_transition = True
 _C.STATENAV.use_open_eye_rollout = True
+_C.STATENAV.alpha_latent = 1.0
+_C.STATENAV.beta_node = 1.0
+_C.STATENAV.lambda_micro_kl = 0.1
+_C.STATENAV.lambda_node_surprise = 0.5
+_C.STATENAV.use_topo_bank = True
+_C.STATENAV.use_topo_gate = True
+_C.STATENAV.use_node_surprise = True
+_C.STATENAV.node_surprise_hidden_dim = 256
+_C.STATENAV.node_update_max_k = 5
+_C.STATENAV.node_novelty_tau = 0.35
+_C.STATENAV.node_decision_candidate_min = 2
 _C.STATENAV.contrast_margin = 0.1
 _C.STATENAV.gumbel_temp = 1.0
 _C.STATENAV.hard_gumbel = True
@@ -448,6 +459,17 @@ def coerce_legacy_scalar_types(config: CN) -> None:
     config.STATENAV.use_open_eye_rollout = _to_bool(
         config.STATENAV.use_open_eye_rollout
     )
+    config.STATENAV.alpha_latent = float(config.STATENAV.alpha_latent)
+    config.STATENAV.beta_node = float(config.STATENAV.beta_node)
+    config.STATENAV.lambda_micro_kl = float(config.STATENAV.lambda_micro_kl)
+    config.STATENAV.lambda_node_surprise = float(config.STATENAV.lambda_node_surprise)
+    config.STATENAV.use_topo_bank = _to_bool(config.STATENAV.use_topo_bank)
+    config.STATENAV.use_topo_gate = _to_bool(config.STATENAV.use_topo_gate)
+    config.STATENAV.use_node_surprise = _to_bool(config.STATENAV.use_node_surprise)
+    config.STATENAV.node_surprise_hidden_dim = int(config.STATENAV.node_surprise_hidden_dim)
+    config.STATENAV.node_update_max_k = int(config.STATENAV.node_update_max_k)
+    config.STATENAV.node_novelty_tau = float(config.STATENAV.node_novelty_tau)
+    config.STATENAV.node_decision_candidate_min = int(config.STATENAV.node_decision_candidate_min)
     config.STATENAV.contrast_margin = float(config.STATENAV.contrast_margin)
     config.STATENAV.gumbel_temp = float(config.STATENAV.gumbel_temp)
     config.STATENAV.hard_gumbel = _to_bool(config.STATENAV.hard_gumbel)

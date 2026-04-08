@@ -717,6 +717,7 @@ class EFESTrainer(StateNavV6Trainer):
                 prev_self=recurrent_state["prev_self"],
                 prev_rssm_h=recurrent_state["prev_rssm_h"],
                 prev_progress=recurrent_state["prev_progress"],
+                prev_prior_alpha=recurrent_state["prev_prior_alpha"],
                 c_micro_recent_mean=c_micro_recent_mean,
                 ground_progress_ref=ground_progress_ref,
                 ground_is_static=ground_is_static,
@@ -740,12 +741,14 @@ class EFESTrainer(StateNavV6Trainer):
             )
 
             c_micro_sum = c_micro_sum + step_outs["C_micro"].sum()
-            c_macro_sum = c_macro_sum + step_outs["C_macro"].sum()
+            macro_valid_mask = step_outs["macro_valid_mask"]
+            if bool(macro_valid_mask.any().item()):
+                c_macro_sum = c_macro_sum + step_outs["C_macro"][macro_valid_mask].sum()
             g_t_sum = g_t_sum + step_outs["g_t"].sum()
             a_t_sum = a_t_sum + step_outs["A_t"].sum()
             pi_t_sum = pi_t_sum + step_outs["pi_t"].sum()
-            macro_valid_sum = macro_valid_sum + step_outs["macro_valid_mask"].to(torch.float32).sum()
-            total_macro_updates += int(step_outs["macro_valid_mask"].sum().item())
+            macro_valid_sum = macro_valid_sum + macro_valid_mask.to(torch.float32).sum()
+            total_macro_updates += int(macro_valid_mask.sum().item())
             for mode_idx in range(4):
                 mode_count_sum[mode_idx] = mode_count_sum[mode_idx] + step_outs["recovery_mode"].eq(mode_idx).sum()
 
@@ -828,6 +831,7 @@ class EFESTrainer(StateNavV6Trainer):
             recurrent_state["prev_z"] = step_outs["z_flat"]
             recurrent_state["prev_progress"] = step_outs["progress_t"]
             recurrent_state["prev_pi"] = step_outs["pi_t"]
+            recurrent_state["prev_prior_alpha"] = step_outs["alpha_prior"]
 
             for i in range(self.envs.num_envs):
                 self._update_backtrack_history(
@@ -998,6 +1002,7 @@ class EFESTrainer(StateNavV6Trainer):
                         "prev_action_emb",
                         "prev_progress",
                         "prev_pi",
+                        "prev_prior_alpha",
                     ):
                         recurrent_state[key] = recurrent_state[key].index_select(0, keep_tensor)
                     topo_bank = topo_bank.index_select(keep_indices)
@@ -1070,6 +1075,7 @@ class EFESTrainer(StateNavV6Trainer):
             timing_metrics = self._reduce_float_dict(timing_sums, average=True)
 
             total_actions_global = max(float(count_metrics["total_actions"]), 1.0)
+            total_macro_updates_global = max(float(count_metrics["total_macro_updates"]), 1.0)
             mode_hist = self._recovery_hist_string(
                 {
                     0: float(sum_metrics["mode_count_0"]),
@@ -1083,7 +1089,7 @@ class EFESTrainer(StateNavV6Trainer):
                 "total_actions": float(count_metrics["total_actions"]),
                 "total_macro_updates": float(count_metrics["total_macro_updates"]),
                 "c_micro_mean": float(sum_metrics["c_micro_sum"]) / total_actions_global,
-                "c_macro_mean": float(sum_metrics["c_macro_sum"]) / total_actions_global,
+                "c_macro_mean": float(sum_metrics["c_macro_sum"]) / total_macro_updates_global,
                 "g_t_mean": float(sum_metrics["g_t_sum"]) / total_actions_global,
                 "a_t_mean": float(sum_metrics["a_t_sum"]) / total_actions_global,
                 "pi_t_mean": float(sum_metrics["pi_t_sum"]) / total_actions_global,

@@ -56,12 +56,16 @@ class MicroRSSM(nn.Module):
         a_prev_emb: Tensor,
         obs_feat: Tensor,
         h_prev: Tensor,
+        prior_alpha: Tensor | None = None,
     ) -> dict[str, Tensor]:
         gru_input = self.input_proj(torch.cat([s_t, a_prev_emb], dim=-1))
         h_t = self.gru(gru_input, h_prev)
 
         mu_pri, raw_pri = self.prior_net(h_t).chunk(2, dim=-1)
         std_pri = F.softplus(raw_pri) + 1e-4
+        if prior_alpha is not None:
+            alpha = prior_alpha.to(device=std_pri.device, dtype=std_pri.dtype).clamp_min(0.05)
+            std_pri = std_pri / alpha.unsqueeze(-1)
 
         mu_post, raw_post = self.post_net(torch.cat([h_t, obs_feat], dim=-1)).chunk(2, dim=-1)
         std_post = F.softplus(raw_post) + 1e-4

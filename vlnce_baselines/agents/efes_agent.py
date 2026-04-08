@@ -120,6 +120,7 @@ class EFESAgent(nn.Module):
             "prev_action_emb": torch.zeros(batch_size, self.d_action, device=device),
             "prev_progress": torch.zeros(batch_size, 1, device=device),
             "prev_pi": torch.full((batch_size,), 0.5, device=device),
+            "prev_prior_alpha": torch.ones(batch_size, device=device),
         }
 
     def project_action_features(self, action_feats: Tensor) -> Tensor:
@@ -216,6 +217,7 @@ class EFESAgent(nn.Module):
         prev_self: Tensor,
         prev_rssm_h: Tensor,
         prev_progress: Tensor,
+        prev_prior_alpha: Tensor,
         c_micro_recent_mean: Tensor,
         ground_progress_ref: Tensor,
         ground_is_static: Tensor,
@@ -240,6 +242,7 @@ class EFESAgent(nn.Module):
             a_prev_emb=prev_action_emb,
             obs_feat=x_t,
             h_prev=prev_rssm_h,
+            prior_alpha=prev_prior_alpha,
         )
         c_micro = micro_out["c_micro"]
 
@@ -294,8 +297,6 @@ class EFESAgent(nn.Module):
         }
 
         adjusted_progress = progress_t * recovery["alpha_progress"].unsqueeze(-1)
-        adjusted_self = s_t * recovery["alpha_progress"].unsqueeze(-1)
-        adjusted_z = micro_out["z_post"] * recovery["alpha_prior"].unsqueeze(-1)
 
         rescored_scores, strict_mask, expanded_mask, level3_selected_idx, level3_decision_code = self._apply_recovery(
             etp_scores=etp_candidate_scores,
@@ -311,10 +312,10 @@ class EFESAgent(nn.Module):
 
         return {
             "s_t": s_t,
-            "h_t": adjusted_self,
+            "h_t": s_t,
             "rssm_h_t": micro_out["h_t"],
             "z_post": micro_out["z_post"],
-            "z_flat": adjusted_z,
+            "z_flat": micro_out["z_post"],
             "progress_t": adjusted_progress,
             "attn_entropy": attn_entropy,
             "prior_mu": micro_out["mu_pri"],

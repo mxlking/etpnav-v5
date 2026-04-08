@@ -3,11 +3,17 @@ from typing import Dict, List, Optional, Tuple, Union
 import networkx as nx
 import numpy as np
 from habitat.core.simulator import Simulator
-from habitat.core.utils import try_cv2_import
 from habitat.tasks.vln.vln import VLNEpisode
 from habitat.utils.visualizations import maps as habitat_maps
 
-cv2 = try_cv2_import()
+try:
+    from habitat.core.utils import try_cv2_import
+    cv2 = try_cv2_import()
+except Exception:
+    try:
+        import cv2
+    except Exception:
+        cv2 = None
 
 AGENT_SPRITE = habitat_maps.AGENT_SPRITE
 
@@ -38,9 +44,22 @@ PREDICT_GHOST = 21
 TEACHER_GHOST = 22
 
 TOP_DOWN_MAP_COLORS = np.full((256, 3), 150, dtype=np.uint8)
-TOP_DOWN_MAP_COLORS[15:] = cv2.applyColorMap(
-    np.arange(241, dtype=np.uint8), cv2.COLORMAP_JET
-).squeeze(1)[:, ::-1]
+if cv2 is not None:
+    TOP_DOWN_MAP_COLORS[15:] = cv2.applyColorMap(
+        np.arange(241, dtype=np.uint8), cv2.COLORMAP_JET
+    ).squeeze(1)[:, ::-1]
+else:
+    try:
+        import matplotlib.cm as cm
+
+        cmap = (cm.get_cmap("jet")(np.linspace(0, 1, 241))[:, :3] * 255).astype(
+            np.uint8
+        )
+        TOP_DOWN_MAP_COLORS[15:] = cmap[:, ::-1]
+    except Exception:
+        TOP_DOWN_MAP_COLORS[15:] = np.tile(
+            np.arange(241, dtype=np.uint8)[:, None], (1, 3)
+        )
 TOP_DOWN_MAP_COLORS[MAP_INVALID_POINT] = [255, 255, 255]  # White
 TOP_DOWN_MAP_COLORS[MAP_VALID_POINT] = [150, 150, 150]  # Light Grey
 TOP_DOWN_MAP_COLORS[MAP_BORDER_INDICATOR] = [50, 50, 50]  # Grey

@@ -6,7 +6,12 @@ from typing import Any, List, Union
 import numpy as np
 from dtw import dtw
 from fastdtw import fastdtw
-from habitat.config import Config
+try:
+    # Old API: Config provided directly
+    from habitat.config import Config
+except Exception:
+    # Newer habitat uses structured configs; fall back to DictConfig as Config
+    from habitat.config.default import DictConfig as Config
 from habitat.core.embodied_task import EmbodiedTask, Measure
 from habitat.core.registry import registry
 from habitat.core.simulator import Simulator

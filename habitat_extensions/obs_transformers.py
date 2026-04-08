@@ -4,7 +4,10 @@ from typing import Dict, List, Tuple, Union
 
 import torch
 from gym import spaces
-from habitat.config import Config
+try:
+    from habitat.config import Config
+except Exception:
+    from habitat.config.default import DictConfig as Config
 from habitat.core.logging import logger
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.obs_transformers import *

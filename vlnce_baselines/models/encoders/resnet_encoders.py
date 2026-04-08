@@ -7,6 +7,7 @@ from gym import spaces
 from habitat import logger
 from habitat_baselines.rl.ddppo.policy import resnet
 from habitat_baselines.rl.ddppo.policy.resnet_policy import ResNetEncoder
+from vlnce_baselines.utils import load_torch_checkpoint_compat
 import torchvision
 import clip
 
@@ -35,7 +36,8 @@ class VlnResnetDepthEncoder(nn.Module):
             param.requires_grad_(trainable)
 
         if checkpoint != "NONE":
-            ddppo_weights = torch.load(checkpoint)
+            # 新加: 兼容 PyTorch 2.6+ 加载旧版 DDPPO checkpoint。
+            ddppo_weights = load_torch_checkpoint_compat(checkpoint, map_location="cpu")
 
             weights_dict = {}
             for k, v in ddppo_weights["state_dict"].items():

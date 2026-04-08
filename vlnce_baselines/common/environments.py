@@ -3,16 +3,33 @@ import math
 import random
 import habitat
 import numpy as np
-from habitat import Config, Dataset
+try:
+    from habitat import Config, Dataset
+except Exception:
+    from vlnce_baselines.config.shim_config import Config
+    try:
+        from habitat import Dataset
+    except Exception:
+        Dataset = None
 from habitat.core.simulator import Observations
 from habitat.tasks.utils import cartesian_to_polar
 from habitat.utils.geometry_utils import quaternion_rotate_vector
 from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
+from habitat_extensions.config.default import to_runtime_task_config
 from habitat_extensions.utils import generate_video, heading_from_quaternion, navigator_video_frame, planner_video_frame
 from scipy.spatial.transform import Rotation as R
 import cv2
 import os
+
+
+# 原始行为保留如下，便于后续对照或回退：
+# sim.step_without_obs(action)
+# 新加: 兼容新版 HabitatSim 移除 step_without_obs，仅保留 step(action) 的情况。
+def _sim_step_compat(sim, action):
+    if hasattr(sim, "step_without_obs"):
+        return sim.step_without_obs(action)
+    return sim.step(action)
 
 
 def quat_from_heading(heading, elevation=0):
@@ -30,7 +47,8 @@ def calculate_vp_rel_pos(p1, p2, base_heading=0, base_elevation=0):
     xz_dist = max(np.sqrt(dx**2 + dz**2), 1e-8)
     # xyz_dist = max(np.sqrt(dx**2 + dy**2 + dz**2), 1e-8)
 
-    heading = np.arcsin(-dx / xz_dist)  # (-pi/2, pi/2)
+    heading_input = np.nan_to_num(-dx / xz_dist, nan=0.0, posinf=1.0, neginf=-1.0)
+    heading = np.arcsin(np.clip(heading_input, -1.0, 1.0))  # (-pi/2, pi/2)
     if p2[2] > p1[2]:
         heading = np.pi - heading
     heading -= base_heading
@@ -44,13 +62,34 @@ def calculate_vp_rel_pos(p1, p2, base_heading=0, base_elevation=0):
 @baseline_registry.register_env(name="VLNCEDaggerEnv")
 class VLNCEDaggerEnv(habitat.RLEnv):
     def __init__(self, config: Config, dataset: Optional[Dataset] = None):
-        super().__init__(config.TASK_CONFIG, dataset)
+        # 新加: 先把旧任务配置转换成新版 Habitat 可接受的运行时配置。
+        runtime_task_config = to_runtime_task_config(config.TASK_CONFIG)
+        print(
+            "[runtime_cfg]",
+            "UPPER_GPU=", getattr(runtime_task_config.SIMULATOR.HABITAT_SIM_V0, "GPU_DEVICE_ID", "NA"),
+            "lower_gpu=", getattr(runtime_task_config.simulator.habitat_sim_v0, "gpu_device_id", "NA"),
+            flush=True,
+        )
+        super().__init__(runtime_task_config, dataset)
         self.prev_episode_id = "something different"
 
         self.video_option = config.VIDEO_OPTION
         self.video_dir = config.VIDEO_DIR
         self.video_frames = []
         self.plan_frames = []
+        # 原始环境并不维护这几条 trace，而是更依赖旧版 Habitat metrics 返回结构。
+        # 新加: 兼容新版 Habitat metrics 结构变化，环境内自行维护轨迹/距离/朝向历史。
+        self._position_trace = []
+        self._distance_trace = []
+        self._heading_trace = []
+        self._steps_taken = 0
+        self._collision_count = 0
+        self._last_collision = False
+
+    @property
+    def original_action_space(self):
+        # 新加：兼容新版 VectorEnv 对 original_action_space 的访问。
+        return self.action_space
 
     def get_reward_range(self) -> Tuple[float, float]:
         # We don't use a reward for DAgger, but the baseline_registry requires
@@ -69,7 +108,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
     def get_metrics(self):
         return self.habitat_env.get_metrics()
 
-    def get_geodesic_dist(self, 
+    def get_geodesic_dist(self,
         node_a: List[float], node_b: List[float]):
         return self._env.sim.geodesic_distance(node_a, node_b)
 
@@ -87,7 +126,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
             "heading": heading,
             "stop": self._env.task.is_stop_called,
         }
-    
+
     def get_pos_ori(self):
         agent_state = self._env.sim.get_agent_state()
         pos = agent_state.position
@@ -98,7 +137,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
         source_position: List[float],
         source_rotation: List[Union[int, np.float64]],
         keep_agent_at_new_pose: bool = False):
-        
+
         obs = self._env.sim.get_observations_at(source_position, source_rotation, keep_agent_at_new_pose)
         obs.update(self._env.task.sensor_suite.get_observations(
             observations=obs, episode=self._env.current_episode, task=self._env.task
@@ -111,13 +150,21 @@ class VLNCEDaggerEnv(habitat.RLEnv):
             init_state.position, self._env.current_episode.goals[0].position,
         )
         return init_distance
-    
+
     def point_dist_to_goal(self, pos):
         dist = self._env.sim.geodesic_distance(
             pos, self._env.current_episode.goals[0].position,
         )
         return dist
-    
+
+    def point_dist_to_goals_batch(self, positions):
+        """Resolve multiple point-to-goal distances inside one env RPC."""
+        goal_pos = self._env.current_episode.goals[0].position
+        dists = []
+        for pos in positions:
+            dists.append(self._env.sim.geodesic_distance(pos, goal_pos))
+        return dists
+
     def get_cand_real_pos(self, forward, angle):
         '''get cand real_pos by executing action'''
 
@@ -133,14 +180,37 @@ class VLNCEDaggerEnv(habitat.RLEnv):
 
         ksteps = int(forward//init_forward)
         for k in range(ksteps):
-            sim.step_without_obs(forward_action)
+            _sim_step_compat(sim, forward_action)
         post_state = sim.get_agent_state()
         post_pose = post_state.position
 
         # reset agent state
         sim.set_agent_state(init_state.position, init_state.rotation)
-        
+
         return post_pose
+
+    def get_cand_real_pos_batch(self, forwards, angles):
+        """Resolve multiple candidate real positions inside one env RPC."""
+        sim = self._env.sim
+        init_state = sim.get_agent_state()
+
+        forward_action = HabitatSimActions.MOVE_FORWARD
+        init_forward = sim.get_agent(0).agent_config.action_space[forward_action].actuation.amount
+
+        cand_positions = []
+        for forward, angle in zip(forwards, angles):
+            theta = np.arctan2(init_state.rotation.imag[1], init_state.rotation.real) + angle / 2
+            rotation = np.quaternion(np.cos(theta), 0, np.sin(theta), 0)
+            sim.set_agent_state(init_state.position, rotation)
+
+            ksteps = int(forward // init_forward)
+            for _ in range(ksteps):
+                _sim_step_compat(sim, forward_action)
+            cand_positions.append(sim.get_agent_state().position)
+
+            sim.set_agent_state(init_state.position, init_state.rotation)
+
+        return cand_positions
 
     def current_dist_to_refpath(self, path):
         sim = self._env.sim
@@ -177,7 +247,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
                     sub_goal_idx = np.where(compare==False)[0][0]-1
                 sub_goal_pos = ref_path[sub_goal_idx]
                 self.progress = sub_goal_idx
-            
+
             self.prev_sub_goal_pos = sub_goal_pos
 
         # ghost dis to subgoal
@@ -188,7 +258,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
 
         oracle_ghost_vp = ghost_vp_pos[np.argmin(ghost_dists_to_subgoal)][0]
         self.prev_episode_id = episode_id
-            
+
         return oracle_ghost_vp
 
     def get_cand_idx(self, ref_path, angles, distances, candidate_length):
@@ -215,7 +285,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
                     sub_goal_idx = np.where(compare==False)[0][0]-1
                 sub_goal_pos = ref_path[sub_goal_idx]
                 self.progress = sub_goal_idx
-            
+
             self.prev_sub_goal_pos = sub_goal_pos
 
         for k in range(len(angles)):
@@ -235,11 +305,11 @@ class VLNCEDaggerEnv(habitat.RLEnv):
 
         self.prev_episode_id = episode_id
         # if curr_dist_to_goal == np.inf:
-            
+
         return oracle_cand_idx #, sub_goal_pos
 
     def cand_dist_to_goal(self, angle: float, forward: float):
-        r'''get resulting distance to goal by executing 
+        r'''get resulting distance to goal by executing
         a candidate action'''
 
         sim = self._env.sim
@@ -249,14 +319,14 @@ class VLNCEDaggerEnv(habitat.RLEnv):
         init_forward = sim.get_agent(0).agent_config.action_space[
             forward_action].actuation.amount
 
-        theta = np.arctan2(init_state.rotation.imag[1], 
+        theta = np.arctan2(init_state.rotation.imag[1],
             init_state.rotation.real) + angle / 2
         rotation = np.quaternion(np.cos(theta), 0, np.sin(theta), 0)
         sim.set_agent_state(init_state.position, rotation)
 
         ksteps = int(forward//init_forward)
         for k in range(ksteps):
-            sim.step_without_obs(forward_action)
+            _sim_step_compat(sim, forward_action)
         post_state = sim.get_agent_state()
         post_distance = self._env.sim.geodesic_distance(
             post_state.position, self._env.current_episode.goals[0].position,
@@ -264,13 +334,13 @@ class VLNCEDaggerEnv(habitat.RLEnv):
 
         # reset agent state
         sim.set_agent_state(init_state.position, init_state.rotation)
-        
+
         return post_distance
-    
-    def cand_dist_to_subgoal(self, 
+
+    def cand_dist_to_subgoal(self,
         angle: float, forward: float,
         sub_goal: Any):
-        r'''get resulting distance to goal by executing 
+        r'''get resulting distance to goal by executing
         a candidate action'''
 
         sim = self._env.sim
@@ -280,7 +350,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
         init_forward = sim.get_agent(0).agent_config.action_space[
             forward_action].actuation.amount
 
-        theta = np.arctan2(init_state.rotation.imag[1], 
+        theta = np.arctan2(init_state.rotation.imag[1],
             init_state.rotation.real) + angle / 2
         rotation = np.quaternion(np.cos(theta), 0, np.sin(theta), 0)
         sim.set_agent_state(init_state.position, rotation)
@@ -289,7 +359,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
         prev_pos = init_state.position
         dis = 0.
         for k in range(ksteps):
-            sim.step_without_obs(forward_action)
+            _sim_step_compat(sim, forward_action)
             pos = sim.get_agent_state().position
             dis += np.linalg.norm(prev_pos - pos)
             prev_pos = pos
@@ -301,23 +371,38 @@ class VLNCEDaggerEnv(habitat.RLEnv):
 
         # reset agent state
         sim.set_agent_state(init_state.position, init_state.rotation)
-        
+
         return post_distance
-    
+
     def reset(self):
         observations = self._env.reset()
+        # 原始行为只做 `observations = self._env.reset()` 后直接返回。
+        # 新加: 这里从 reset 开始记录 episode 轨迹，供旧版 eval 统计逻辑继续读取。
+        agent_info = self.get_agent_info()
+        start_pos = agent_info["position"]
+        start_heading = agent_info["heading"]
+        start_dist = self._env.sim.geodesic_distance(
+            self._env.sim.get_agent_state().position,
+            self._env.current_episode.goals[0].position,
+        )
+        self._position_trace = [start_pos]
+        self._distance_trace = [float(start_dist)]
+        self._heading_trace = [float(start_heading)]
+        self._steps_taken = 0
+        self._collision_count = 0
+        self._last_collision = False
         if self.video_option:
             info = self.get_info(observations)
             self.video_frames = [
                 navigator_video_frame(
-                    observations, 
+                    observations,
                     info,
                 )
             ]
         return observations
 
     # def wrap_act(self, act, ang, dis, cand_wp, action_wp, oracle_wp, start_p, start_h):
-    def wrap_act(self, act, vis_info):
+    def wrap_act(self, act, vis_info=None):
         ''' wrap action, get obs if video_option '''
         observations = None
         if self.video_option:
@@ -331,13 +416,50 @@ class VLNCEDaggerEnv(habitat.RLEnv):
                 )
             )
         else:
-            self._env.sim.step_without_obs(act)
-            self._env._task.measurements.update_measures(
-                episode=self._env.current_episode, action=act, task=self._env.task 
-            )
+            # 原始写法保留如下，便于后续对照或回退：
+            # self._env.sim.step_without_obs(act)
+            # self._env._task.measurements.update_measures(
+            #     episode=self._env.current_episode, action=act, task=self._env.task
+            # )
+            if hasattr(self._env.sim, "step_without_obs"):
+                self._env.sim.step_without_obs(act)
+                self._env._task.measurements.update_measures(
+                    episode=self._env.current_episode, action=act, task=self._env.task
+                )
+            else:
+                # 新加: 新版 HabitatSim 删除了 step_without_obs，必须用 sim.step(act)
+                # 而非 env.step(act)。env.step 会走完整的环境流水线（task.step /
+                # episode_over 检查等），导致低层转向/前进在 multi_step_control 中
+                # 被当作 episode 级别的 step，提前触发回合终止，指标塌方。
+                # sim.step 仅推进物理引擎+渲染，等价于原始 step_without_obs 的语义。
+                self._env.sim.step(act)
+                self._env._task.measurements.update_measures(
+                    episode=self._env.current_episode, action=act, task=self._env.task
+                )
+        self._last_collision = bool(self._env.sim.previous_step_collided)
+        if self._last_collision:
+            self._collision_count += 1
+        # 新加: 每个 primitive action 后都记录真实轨迹，而非只在宏动作结束时记一次。
+        # 原先 trace 记录在 step() 末尾，导致 steps_taken≈14 其实是高层决策次数
+        # 而非真实环境步数，path_length / oracle_success / spl / ndtw 全被污染。
+        self._record_primitive_step()
         return observations
 
-    def turn(self, ang, vis_info):    
+    def _record_primitive_step(self):
+        """新加: 记录一次 primitive action 之后的 agent 状态到 trace 中。"""
+        agent_info = self.get_agent_info()
+        pos = agent_info["position"]
+        heading = agent_info["heading"]
+        dist = self._env.sim.geodesic_distance(
+            self._env.sim.get_agent_state().position,
+            self._env.current_episode.goals[0].position,
+        )
+        self._position_trace.append(pos)
+        self._heading_trace.append(float(heading))
+        self._distance_trace.append(float(dist))
+        self._steps_taken += 1
+
+    def turn(self, ang, vis_info=None):
         ''' angle: 0 ~ 360 degree '''
         act_l = HabitatSimActions.TURN_LEFT
         act_r = HabitatSimActions.TURN_RIGHT
@@ -359,8 +481,10 @@ class VLNCEDaggerEnv(habitat.RLEnv):
 
     def teleport(self, pos):
         self._env.sim.set_agent_state(pos, quat_from_heading(0))
+        # 新加: teleport 也是一次位置变化，记录到 trace 中。
+        self._record_primitive_step()
 
-    def single_step_control(self, pos, tryout, vis_info):
+    def single_step_control(self, pos, tryout, vis_info=None):
         act_f = HabitatSimActions.MOVE_FORWARD
         uni_f = self._env.sim.get_agent(0).agent_config.action_space[act_f].actuation.amount
         agent_state = self._env.sim.get_agent_state()
@@ -372,7 +496,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
             for _ in range(ksteps):
                 self.wrap_act(act_f, vis_info)
         else:
-            cnt = 0 
+            cnt = 0
             for _ in range(ksteps):
                 self.wrap_act(act_f, vis_info)
                 if self._env.sim.previous_step_collided:
@@ -419,12 +543,12 @@ class VLNCEDaggerEnv(habitat.RLEnv):
                             if self._env.sim.previous_step_collided:
                                 break
                         break
-    
-    def multi_step_control(self, path, tryout, vis_info):
+
+    def multi_step_control(self, path, tryout, vis_info=None):
         for vp, vp_pos in path: #path[::-1]:
             self.single_step_control(vp_pos, tryout, vis_info)
 
-    def get_plan_frame(self, vis_info):
+    def get_plan_frame(self, vis_info=None):
         agent_state = self._env.sim.get_agent_state()
         observations = self.get_observation_at(agent_state.position, agent_state.rotation)
         info = self.get_info(observations)
@@ -433,7 +557,21 @@ class VLNCEDaggerEnv(habitat.RLEnv):
         frame = cv2.copyMakeBorder(frame, 6,6,5,5, cv2.BORDER_CONSTANT, value=(255,255,255))
         self.plan_frames.append(frame)
 
-    def step(self, action, vis_info, *args, **kwargs):
+    # 原始写法保留如下，便于后续对照或回退：
+    # def step(self, action, vis_info, *args, **kwargs):
+    # 新加: 同时兼容旧版 ETPNav 的 step(action, vis_info) 和新版 Habitat wrapper 的 step(action)。
+    def step(self, action, vis_info=None, *args, **kwargs):
+        # 新加: 兼容新版 Habitat/Gym wrapper 传入的标准 action envelope。
+        if isinstance(action, dict) and 'act' not in action and 'action' in action:
+            if vis_info is None and 'vis_info' in action:
+                vis_info = action['vis_info']
+            action = action['action']
+
+        if vis_info is None:
+            vis_info = {}
+
+        self._last_collision = False
+
         act = action['act']
 
         if act == 4: # high to low
@@ -477,11 +615,27 @@ class VLNCEDaggerEnv(habitat.RLEnv):
                 self.get_plan_frame(vis_info)
 
         else:
-            raise NotImplementedError                
+            raise NotImplementedError
 
         reward = self.get_reward(observations)
         done = self.get_done(observations)
         info = self.get_info(observations)
+
+        # 新加: trace 现在由 wrap_act() / teleport() 在每个 primitive action 后逐步记录，
+        # 这里只需要把已有的完整 trace 塞进 info 供上层 eval 使用，不再追加。
+        info["position"] = {
+            "position": self._position_trace,
+            "distance": self._distance_trace,
+        }
+        info["position_infer"] = {
+            "position": self._position_trace,
+            "heading": self._heading_trace,
+        }
+        info.setdefault("steps_taken", self._steps_taken)
+        info.setdefault(
+            "collisions",
+            {"count": self._collision_count, "is_collision": self._last_collision},
+        )
 
         if self.video_option and done:
             # if 0 < info["spl"] <= 0.6:  #TODO backtrack
@@ -498,7 +652,7 @@ class VLNCEDaggerEnv(habitat.RLEnv):
             )
             # for pano visualization
             metrics={
-                        # "sr": round(info["success"], 3), 
+                        # "sr": round(info["success"], 3),
                         "spl": round(info["spl"], 3),
                         # "ndtw": round(info["ndtw"], 3),
                         # "sdtw": round(info["sdtw"], 3),
@@ -520,7 +674,20 @@ class VLNCEDaggerEnv(habitat.RLEnv):
 @baseline_registry.register_env(name="VLNCEInferenceEnv")
 class VLNCEInferenceEnv(habitat.RLEnv):
     def __init__(self, config: Config, dataset: Optional[Dataset] = None):
-        super().__init__(config.TASK_CONFIG, dataset)
+        # 新加: 先把旧任务配置转换成新版 Habitat 可接受的运行时配置。
+        runtime_task_config = to_runtime_task_config(config.TASK_CONFIG)
+        print(
+            "[runtime_cfg]",
+            "UPPER_GPU=", getattr(runtime_task_config.SIMULATOR.HABITAT_SIM_V0, "GPU_DEVICE_ID", "NA"),
+            "lower_gpu=", getattr(runtime_task_config.simulator.habitat_sim_v0, "gpu_device_id", "NA"),
+            flush=True,
+        )
+        super().__init__(runtime_task_config, dataset)
+
+    @property
+    def original_action_space(self):
+        # 新加：兼容新版 VectorEnv 对 original_action_space 的访问。
+        return self.action_space
 
     def get_reward_range(self):
         return (0.0, 0.0)

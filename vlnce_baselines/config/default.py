@@ -316,6 +316,51 @@ _C.STATENAV.LABEL_BUILDER.recovery_tolerance_steps = 1
 _C.STATENAV.LABEL_BUILDER.max_prefix_backtrack = 1
 _C.STATENAV.LABEL_BUILDER.min_valid_conditions = 3
 
+# -----------------------------------------------------------------------------
+# EFES CONFIG
+# -----------------------------------------------------------------------------
+_C.EFES = CN()
+_C.EFES.d_model = 768
+_C.EFES.d_z = 256
+_C.EFES.d_h = 512
+_C.EFES.d_action = 128
+_C.EFES.max_nodes = 50
+_C.EFES.sigma_min = 0.01
+_C.EFES.eps_path = 0.3
+_C.EFES.history_window = 5
+_C.EFES.timeout_steps = 10
+_C.EFES.node_decision_candidate_min = 2
+_C.EFES.tau_low = 1.0
+_C.EFES.tau_high = 2.5
+_C.EFES.pi_threshold = 0.5
+_C.EFES.stop_idx = 0
+_C.EFES.use_macro = True
+_C.EFES.use_grounding = True
+_C.EFES.use_confidence = True
+_C.EFES.use_recovery = True
+_C.EFES.phase1_iters = 10000
+_C.EFES.phase2_warmup_iters = 100
+_C.EFES.efes_lr_phase1 = 1.0e-4
+_C.EFES.efes_lr_phase2 = 5.0e-5
+_C.EFES.etp_lr_phase2 = 1.0e-5
+_C.EFES.lambda_kl = 1.0
+_C.EFES.lambda_node = 0.5
+_C.EFES.lambda_cal = 0.1
+_C.EFES.max_keep_checkpoints = 3
+_C.EFES.grad_clip_norm = 5.0
+_C.EFES.etp_unfreeze_keywords = [
+    "global_sap_head",
+    "global_encoder.encoder.x_layers",
+]
+_C.EFES.LOGGING = CN()
+_C.EFES.LOGGING.use_tqdm = True
+_C.EFES.LOGGING.step_log_every = 1
+_C.EFES.LOGGING.write_step_metrics = True
+_C.EFES.LOGGING.step_metrics_filename = "step_metrics.tsv"
+_C.EFES.LOGGING.log_full_model_report_to_runtime = False
+_C.EFES.LOGGING.save_best_by_train_loss = False
+_C.EFES.LOGGING.log_diag_metrics = True
+
 
 def purge_keys(config: CN, keys: List[str]) -> None:
     for k in keys:
@@ -543,6 +588,45 @@ def coerce_legacy_scalar_types(config: CN) -> None:
     config.STATENAV.LABEL_BUILDER.min_valid_conditions = int(
         config.STATENAV.LABEL_BUILDER.min_valid_conditions
     )
+    config.EFES.d_model = int(config.EFES.d_model)
+    config.EFES.d_z = int(config.EFES.d_z)
+    config.EFES.d_h = int(config.EFES.d_h)
+    config.EFES.d_action = int(config.EFES.d_action)
+    config.EFES.max_nodes = int(config.EFES.max_nodes)
+    config.EFES.sigma_min = float(config.EFES.sigma_min)
+    config.EFES.eps_path = float(config.EFES.eps_path)
+    config.EFES.history_window = int(config.EFES.history_window)
+    config.EFES.timeout_steps = int(config.EFES.timeout_steps)
+    config.EFES.node_decision_candidate_min = int(config.EFES.node_decision_candidate_min)
+    config.EFES.tau_low = float(config.EFES.tau_low)
+    config.EFES.tau_high = float(config.EFES.tau_high)
+    config.EFES.pi_threshold = float(config.EFES.pi_threshold)
+    config.EFES.stop_idx = int(config.EFES.stop_idx)
+    config.EFES.use_macro = _to_bool(config.EFES.use_macro)
+    config.EFES.use_grounding = _to_bool(config.EFES.use_grounding)
+    config.EFES.use_confidence = _to_bool(config.EFES.use_confidence)
+    config.EFES.use_recovery = _to_bool(config.EFES.use_recovery)
+    config.EFES.phase1_iters = int(config.EFES.phase1_iters)
+    config.EFES.phase2_warmup_iters = int(config.EFES.phase2_warmup_iters)
+    config.EFES.efes_lr_phase1 = float(config.EFES.efes_lr_phase1)
+    config.EFES.efes_lr_phase2 = float(config.EFES.efes_lr_phase2)
+    config.EFES.etp_lr_phase2 = float(config.EFES.etp_lr_phase2)
+    config.EFES.lambda_kl = float(config.EFES.lambda_kl)
+    config.EFES.lambda_node = float(config.EFES.lambda_node)
+    config.EFES.lambda_cal = float(config.EFES.lambda_cal)
+    config.EFES.max_keep_checkpoints = int(config.EFES.max_keep_checkpoints)
+    config.EFES.grad_clip_norm = float(config.EFES.grad_clip_norm)
+    config.EFES.LOGGING.use_tqdm = _to_bool(config.EFES.LOGGING.use_tqdm)
+    config.EFES.LOGGING.step_log_every = int(config.EFES.LOGGING.step_log_every)
+    config.EFES.LOGGING.write_step_metrics = _to_bool(config.EFES.LOGGING.write_step_metrics)
+    config.EFES.LOGGING.step_metrics_filename = str(config.EFES.LOGGING.step_metrics_filename)
+    config.EFES.LOGGING.log_full_model_report_to_runtime = _to_bool(
+        config.EFES.LOGGING.log_full_model_report_to_runtime
+    )
+    config.EFES.LOGGING.save_best_by_train_loss = _to_bool(
+        config.EFES.LOGGING.save_best_by_train_loss
+    )
+    config.EFES.LOGGING.log_diag_metrics = _to_bool(config.EFES.LOGGING.log_diag_metrics)
 
 
 def get_config(

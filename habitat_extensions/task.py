@@ -4,7 +4,10 @@ import os
 from typing import Dict, List, Optional, Union
 
 import attr
-from habitat.config import Config
+try:
+    from habitat.config import Config
+except Exception:
+    from habitat.config.default import DictConfig as Config
 from habitat.core.dataset import Dataset
 from habitat.core.registry import registry
 from habitat.core.utils import not_none_validator

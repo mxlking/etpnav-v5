@@ -1,0 +1,112 @@
+BASE_TASK_CONFIG_PATH: run_r2r/r2r_vlnce.yaml
+SIMULATOR_GPU_IDS: [0]
+TORCH_GPU_ID: 0
+TORCH_GPU_IDS: [0]
+TRAINER_NAME: EFES
+GPU_NUMBERS: 1
+NUM_ENVIRONMENTS: 8
+TENSORBOARD_DIR: data/logs/tensorboard_dirs/
+CHECKPOINT_FOLDER: data/logs/checkpoints/
+EVAL_CKPT_PATH_DIR: data/logs/checkpoints/
+RESULTS_DIR: data/logs/eval_results/
+VIDEO_DIR: data/logs/video/
+
+INFERENCE:
+  SPLIT: test
+  USE_CKPT_CONFIG: False
+  SAMPLE: False
+  CKPT_PATH: ''
+  PREDICTIONS_FILE: ''
+  FORMAT: r2r
+  EPISODE_COUNT: -1
+
+EVAL:
+  USE_CKPT_CONFIG: False
+  SPLIT: val_unseen
+  EPISODE_COUNT: -1
+  LOG_EVERY_EPISODE: 1
+  CKPT_PATH_DIR: ''
+  fast_eval: False
+
+IL:
+  iters: 15000
+  log_every: 200
+  lr: 1.0e-5
+  batch_size: 4
+  ml_weight: 1.0
+  expert_policy: spl
+  load_from_ckpt: True
+  ckpt_to_load: data/logs/checkpoints/release_r2r/ckpt.iter12000.pth
+  is_requeue: False
+  sample_ratio: 0.75
+  decay_interval: 3000
+  max_traj_len: 15
+  max_text_len: 80
+  loc_noise: 0.5
+  waypoint_aug: False
+  ghost_aug: 0.0
+  back_algo: teleport
+  tryout: True
+
+MODEL:
+  task_type: r2r
+  policy_name: PolicyViewSelectionETP
+  NUM_ANGLES: 12
+  pretrained_path: pretrained/ETP/mlm.sap_r2r/ckpts/model_step_82500.pt
+  fix_lang_embedding: False
+  fix_pano_embedding: False
+  use_depth_embedding: True
+  use_sprels: True
+  merge_ghost: True
+  consume_ghost: True
+  spatial_output: False
+  RGB_ENCODER:
+    output_size: 512
+  DEPTH_ENCODER:
+    output_size: 256
+  VISUAL_DIM:
+    vis_hidden: 768
+    directional: 128
+  INSTRUCTION_ENCODER:
+    bidirectional: True
+
+EFES:
+  d_model: 768
+  d_z: 256
+  d_h: 512
+  d_action: 128
+  max_nodes: 50
+  sigma_min: 0.01
+  eps_path: 0.3
+  history_window: 5
+  timeout_steps: 10
+  node_decision_candidate_min: 2
+  tau_low: 1.0
+  tau_high: 2.5
+  pi_threshold: 0.5
+  stop_idx: 0
+  use_macro: True
+  use_grounding: True
+  use_confidence: True
+  use_recovery: True
+  phase1_iters: 10000
+  phase2_warmup_iters: 100
+  efes_lr_phase1: 1.0e-4
+  efes_lr_phase2: 5.0e-5
+  etp_lr_phase2: 1.0e-5
+  lambda_kl: 1.0
+  lambda_node: 0.5
+  lambda_cal: 0.1
+  max_keep_checkpoints: 3
+  grad_clip_norm: 5.0
+  etp_unfreeze_keywords:
+    - global_sap_head
+    - global_encoder.encoder.x_layers
+  LOGGING:
+    use_tqdm: True
+    step_log_every: 1
+    write_step_metrics: True
+    step_metrics_filename: step_metrics.tsv
+    log_full_model_report_to_runtime: False
+    save_best_by_train_loss: False
+    log_diag_metrics: True

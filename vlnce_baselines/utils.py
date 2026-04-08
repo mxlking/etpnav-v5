@@ -4,6 +4,16 @@ import numpy as np
 import math
 import copy
 
+
+def load_torch_checkpoint_compat(path, *args, **kwargs):
+    if "weights_only" not in kwargs:
+        kwargs["weights_only"] = False
+    try:
+        return torch.load(path, *args, **kwargs)
+    except TypeError:
+        kwargs.pop("weights_only", None)
+        return torch.load(path, *args, **kwargs)
+
 class ARGS():
     def __init__(self):
         self.local_rank = 0

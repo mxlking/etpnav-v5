@@ -7,7 +7,12 @@ import numpy as np
 import quaternion
 import torch
 from habitat.core.simulator import Simulator
-from habitat.core.utils import try_cv2_import
+try:
+    from habitat.core.utils import try_cv2_import
+    cv2 = try_cv2_import()
+except Exception:
+    # 新加: 兼容新版 Habitat 移除了 try_cv2_import 的情况。
+    import cv2
 from habitat.tasks.utils import cartesian_to_polar
 from habitat.utils.geometry_utils import (
     quaternion_rotate_vector,
@@ -22,7 +27,6 @@ from torch import Tensor
 from habitat_extensions import maps
 from habitat_baselines.common.baseline_registry import baseline_registry
 
-cv2 = try_cv2_import()
 obs_trans_to_eq = baseline_registry.get_obs_transformer("CubeMap2Equirect")
 UUIDS_EQ = ['rgbback', 'rgbdown', 'rgbfront', 'rgbright', 'rgbleft', 'rgbup']
 CUBE2EQ = obs_trans_to_eq(UUIDS_EQ, (224,448))

@@ -5,12 +5,48 @@ from typing import List, Optional, Type, Union
 
 import habitat
 from habitat import logger
-from habitat import Config, Env, RLEnv, VectorEnv, make_dataset
-from habitat_baselines.utils.env_utils import make_env_fn
+try:
+    from habitat import Config, Env, RLEnv, VectorEnv, make_dataset
+except Exception:
+    from vlnce_baselines.config.shim_config import Config
+    try:
+        from habitat import Env, RLEnv, VectorEnv, make_dataset
+    except Exception:
+        Env = RLEnv = VectorEnv = make_dataset = None
 
 random.seed(0)
 
 SLURM_JOBID = os.environ.get("SLURM_JOB_ID", None)
+
+
+# 新加: 单环境调试时优先使用线程版 VectorEnv，这样环境异常会直接在主进程抛出，
+# 不会只表现成子进程 EOFError；也允许用环境变量强制开启该模式。
+def _should_use_threaded_vector_env(num_envs: int) -> bool:
+    force_threaded = os.environ.get("ETPNAV_FORCE_THREADED_VECTOR_ENV", "")
+    if force_threaded.lower() in {"1", "true", "yes", "on"}:
+        return True
+    return bool(sys.gettrace()) or num_envs == 1
+
+
+# 新加: 兼容新版 habitat-baselines 不再提供 habitat_baselines.utils.env_utils.make_env_fn。
+def make_env_fn(
+    config: Config,
+    env_class: Type[Union[Env, RLEnv]],
+    dataset=None,
+) -> Union[Env, RLEnv]:
+    if dataset is None:
+        dataset = make_dataset(
+            config.TASK_CONFIG.DATASET.TYPE, config=config.TASK_CONFIG.DATASET
+        )
+    print(
+        "[make_env_fn]",
+        "seed=", config.TASK_CONFIG.SEED,
+        "UPPER_GPU=", getattr(config.TASK_CONFIG.SIMULATOR.HABITAT_SIM_V0, "GPU_DEVICE_ID", "NA"),
+        flush=True,
+    )
+    env = env_class(config=config, dataset=dataset)
+    env.seed(config.TASK_CONFIG.SEED)
+    return env
 
 
 def is_slurm_job() -> bool:
@@ -107,14 +143,23 @@ def construct_envs(
                 task_config.DATASET.CONTENT_SCENES = scene_splits[proc_id]
 
             task_config.SIMULATOR.HABITAT_SIM_V0.GPU_DEVICE_ID = gpus[i]
+            task_config.SIMULATOR.HABITAT_SIM_V0.gpu_device_id = gpus[i]
 
             task_config.SIMULATOR.AGENT_0.SENSORS = config.SENSORS
+            task_config.SIMULATOR.AGENT_0.sensors = config.SENSORS
+
+            # 强制同步新版 Habitat 运行时会读取的小写别名
+            if hasattr(task_config, "simulator"):
+                if hasattr(task_config.simulator, "habitat_sim_v0"):
+                    task_config.simulator.habitat_sim_v0.gpu_device_id = gpus[i]
+                if hasattr(task_config.simulator, "agent_0"):
+                    task_config.simulator.agent_0.sensors = config.SENSORS
 
             proc_config.freeze()
             configs.append(proc_config) 
 
-    is_debug = True if sys.gettrace() else False
-    env_entry = habitat.ThreadedVectorEnv if is_debug else habitat.VectorEnv
+    use_threaded_env = _should_use_threaded_vector_env(num_envs)
+    env_entry = habitat.ThreadedVectorEnv if use_threaded_env else habitat.VectorEnv
     envs = env_entry(
         make_env_fn=make_env_fn,
         env_fn_args=tuple(zip(configs, env_classes)), 
@@ -202,14 +247,24 @@ def construct_envs_for_rl(
                 task_config.DATASET.CONTENT_SCENES = scene_splits[proc_id]
 
             task_config.SIMULATOR.HABITAT_SIM_V0.GPU_DEVICE_ID = gpus[i]
+            task_config.SIMULATOR.HABITAT_SIM_V0.gpu_device_id = gpus[i]
 
             task_config.SIMULATOR.AGENT_0.SENSORS = config.SENSORS
+            task_config.SIMULATOR.AGENT_0.sensors = config.SENSORS
+
+            # 强制同步新版 Habitat 运行时会读取的小写别名
+            if hasattr(task_config, "simulator"):
+                if hasattr(task_config.simulator, "habitat_sim_v0"):
+                    task_config.simulator.habitat_sim_v0.gpu_device_id = gpus[i]
+                if hasattr(task_config.simulator, "agent_0"):
+                    task_config.simulator.agent_0.sensors = config.SENSORS
+
 
             proc_config.freeze()
             configs.append(proc_config)
 
-    is_debug = True if sys.gettrace() else False
-    env_entry = habitat.ThreadedVectorEnv if is_debug else habitat.VectorEnv
+    use_threaded_env = _should_use_threaded_vector_env(num_envs)
+    env_entry = habitat.ThreadedVectorEnv if use_threaded_env else habitat.VectorEnv
     envs = env_entry(
         make_env_fn=make_env_fn,
         env_fn_args=tuple(zip(configs, env_classes)),

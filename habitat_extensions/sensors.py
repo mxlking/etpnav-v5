@@ -2,7 +2,10 @@ from typing import Any, Dict
 
 import numpy as np
 from gym import spaces
-from habitat.config import Config
+try:
+    from habitat.config import Config
+except Exception:
+    from habitat.config.default import DictConfig as Config
 from habitat.core.registry import registry
 from habitat.core.simulator import Observations, Sensor, SensorTypes, Simulator
 from habitat.sims.habitat_simulator.actions import HabitatSimActions
@@ -100,7 +103,7 @@ class ShortestPathSensor(Sensor):
         return SensorTypes.TACTILE
 
     def _get_observation_space(self, *args: Any, **kwargs: Any):
-        return spaces.Box(low=0.0, high=100, shape=(1,), dtype=np.float)
+        return spaces.Box(low=0.0, high=100, shape=(1,), dtype=np.float32)
 
     def get_observation(self, *args: Any, episode, **kwargs: Any):
         best_action = self.follower.get_next_action(episode.goals[0].position)
@@ -138,7 +141,7 @@ class VLNOracleProgressSensor(Sensor):
         return SensorTypes.MEASUREMENT
 
     def _get_observation_space(self, *args: Any, **kwargs: Any):
-        return spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float)
+        return spaces.Box(low=0.0, high=1.0, shape=(1,), dtype=np.float32)
 
     def get_observation(
         self, observations, *args: Any, episode, **kwargs: Any

@@ -30,9 +30,13 @@ from habitat_sim.simulator import MutableMapping, MutableMapping_T
 from habitat.sims.habitat_simulator.habitat_simulator import HabitatSim
 from habitat.core.dataset import Episode
 from habitat.core.registry import registry
+try:
+    from habitat.core.simulator import Config
+except Exception:
+    # 新加: 兼容新版 Habitat 不再从 habitat.core.simulator 暴露 Config。
+    from navmorph_compat import CompatCN as Config
 from habitat.core.simulator import (
     AgentState,
-    Config,
     DepthSensor,
     Observations,
     RGBSensor,

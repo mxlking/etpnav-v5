@@ -1,4 +1,5 @@
 import torch
+from vlnce_baselines.utils import load_torch_checkpoint_compat
 
 
 def get_tokenizer(args):
@@ -20,7 +21,8 @@ def get_vlnbert_models(config=None):
     model_name_or_path = config.pretrained_path
     new_ckpt_weights = {}
     if model_name_or_path is not None:
-        ckpt_weights = torch.load(model_name_or_path, map_location='cpu')
+        # 新加: 兼容 PyTorch 2.6+ 加载旧版 VLN-BERT checkpoint。
+        ckpt_weights = load_torch_checkpoint_compat(model_name_or_path, map_location='cpu')
         for k, v in ckpt_weights.items():
             if k.startswith('module'):
                 new_ckpt_weights[k[7:]] = v

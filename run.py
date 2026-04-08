@@ -5,12 +5,16 @@ import random
 import os
 import numpy as np
 import torch
+from navmorph_compat import patch_habitat_compat
+
+patch_habitat_compat()
 from habitat import logger
 from habitat_baselines.common.baseline_registry import baseline_registry
 
 import habitat_extensions  # noqa: F401
 import vlnce_baselines  # noqa: F401
 from vlnce_baselines.models.Policy_ViewSelection_ETP import PolicyViewSelectionETP  # noqa: F401
+from vlnce_baselines.trainers.train_efes import EFESTrainer  # noqa: F401
 from vlnce_baselines.trainers.train_statenav_v5_stage1 import StateNavV5Stage1Trainer  # noqa: F401
 from vlnce_baselines.trainers.train_statenav_v5_stage2 import StateNavV5Stage2Trainer  # noqa: F401
 from vlnce_baselines.trainers.train_statenav_v6_stage1 import StateNavV6Trainer  # noqa: F401

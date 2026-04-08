@@ -1,4 +1,4 @@
-from turtle import heading
+# from turtle import heading
 from typing import Any, List, Optional, Tuple
 
 import math
@@ -53,8 +53,8 @@ class MoveHighToLowAction(SimulatorTaskAction):
         for turn_action in turn_actions:
             self._sim.step_without_obs(turn_action)
             # print(self.cal_heading(self._sim.get_agent_state()))
-    
-    def step(self, *args: Any, 
+
+    def step(self, *args: Any,
             angle: float, distance: float,
             niu1niu: bool = False,
             **kwargs: Any):
@@ -77,9 +77,9 @@ class MoveHighToLowAction(SimulatorTaskAction):
                     output = self._sim.step(forward_action)
                 else:
                     self._sim.step_without_obs(forward_action)
-            
+
             return output
-        
+
         elif niu1niu:
             positions = []
             collisions = []
@@ -105,7 +105,7 @@ class MoveHighToLowAction(SimulatorTaskAction):
                     if self._sim.previous_step_collided:
                         output = self._sim.step(forward_action)
                         break
-            
+
             # left forward step
             forward_step = forward_step - len(collisions)
             if forward_step > 0:
@@ -192,7 +192,7 @@ class MoveHighToLowActionEval(SimulatorTaskAction):
             self._sim.step_without_obs(turn_action)
             # print(self.cal_heading(self._sim.get_agent_state()))
 
-    def step(self, *args: Any, 
+    def step(self, *args: Any,
             angle: float, distance: float,
             niu1niu: bool = False,
             **kwargs: Any):
@@ -207,7 +207,7 @@ class MoveHighToLowActionEval(SimulatorTaskAction):
 
             init_forward = self._sim.get_agent(0).agent_config.action_space[
                 forward_action].actuation.amount
-            theta = np.arctan2(init_state.rotation.imag[1], 
+            theta = np.arctan2(init_state.rotation.imag[1],
                 init_state.rotation.real) + angle / 2
             rotation = np.quaternion(np.cos(theta), 0, np.sin(theta), 0)
             self._sim.set_agent_state(init_state.position, rotation)
@@ -251,7 +251,7 @@ class MoveHighToLowActionEval(SimulatorTaskAction):
                     if self._sim.previous_step_collided:
                         output = self._sim.step(forward_action)
                         break
-            
+
             # left forward step
             forward_step = forward_step - len(collisions)
             if forward_step > 0:
@@ -328,7 +328,7 @@ class MoveHighToLowActionInference(SimulatorTaskAction):
             turn_actions = [right_action] * (-angle // turn_unit)
         for turn_action in turn_actions:
             self._sim.step_without_obs(turn_action)
-    
+
     def get_agent_info(self):
         agent_state = self._sim.get_agent_state()
         heading_vector = quaternion_rotate_vector(
@@ -341,7 +341,7 @@ class MoveHighToLowActionInference(SimulatorTaskAction):
             "stop": False,
         }
 
-    def step(self, *args: Any, 
+    def step(self, *args: Any,
             angle: float, distance: float,
             niu1niu: bool = False,
             **kwargs: Any):
@@ -355,7 +355,7 @@ class MoveHighToLowActionInference(SimulatorTaskAction):
 
             init_forward = self._sim.get_agent(0).agent_config.action_space[
                 forward_action].actuation.amount
-            theta = np.arctan2(init_state.rotation.imag[1], 
+            theta = np.arctan2(init_state.rotation.imag[1],
                 init_state.rotation.real) + angle / 2
             rotation = np.quaternion(np.cos(theta), 0, np.sin(theta), 0)
             self._sim.set_agent_state(init_state.position, rotation)
@@ -393,7 +393,7 @@ class MoveHighToLowActionInference(SimulatorTaskAction):
                     if self._sim.previous_step_collided:
                         output = self._sim.step(forward_action)
                         break
-            
+
             # left forward step
             forward_step = forward_step - len(cur_path)
             if forward_step > 0:
@@ -444,6 +444,6 @@ class MoveHighToLowActionInference(SimulatorTaskAction):
                                     output = self._sim.step(forward_action)
                                     break
                         break
-            
+
             output['cur_path'] = cur_path
             return output

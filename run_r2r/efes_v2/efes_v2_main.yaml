@@ -2,7 +2,7 @@ BASE_TASK_CONFIG_PATH: run_r2r/r2r_vlnce.yaml
 SIMULATOR_GPU_IDS: [0]
 TORCH_GPU_ID: 0
 TORCH_GPU_IDS: [0]
-TRAINER_NAME: EFESSelf
+TRAINER_NAME: EFESV2
 GPU_NUMBERS: 1
 NUM_ENVIRONMENTS: 8
 TENSORBOARD_DIR: data/logs/tensorboard_dirs/
@@ -24,7 +24,6 @@ EVAL:
   USE_CKPT_CONFIG: False
   SPLIT: val_unseen
   EPISODE_COUNT: -1
-  EPISODE_ID_ALLOWLIST: ""
   LOG_EVERY_EPISODE: 1
   CKPT_PATH_DIR: ''
   fast_eval: False
@@ -46,7 +45,7 @@ IL:
   loc_noise: 0.5
   waypoint_aug: False
   ghost_aug: 0.0
-  back_algo: control
+  back_algo: teleport
   tryout: True
 
 MODEL:
@@ -71,7 +70,7 @@ MODEL:
   INSTRUCTION_ENCODER:
     bidirectional: True
 
-EFES_SELF:
+EFES_V2:
   d_model: 768
   d_z: 256
   d_h: 512
@@ -83,49 +82,26 @@ EFES_SELF:
   eps_path: 0.3
   history_window: 5
   future_window: 3
-  timeout_steps: 16
-  cooldown_steps: 5
-  node_decision_candidate_min: 3
-  novelty_threshold: 0.45
+  timeout_steps: 10
+  cooldown_steps: 3
+  node_decision_candidate_min: 2
+  novelty_threshold: 0.35
+  router_temperature: 1.0
   tau_low: 1.0
   tau_high: 2.5
+  pi_threshold: 0.5
   stop_idx: 0
-  action_source: etp
-  conditioner_max_delta: 1.0
-  conditioner_gate_bias: -2.0
-  conditioner_mode: prob_mixture
-  conditioner_beta_max: 0.1
-  conditioner_prob_eps: 1.0e-8
-  conditioner_rupture_threshold: 0.75
-  conditioner_eligibility_temperature: 0.1
-  conditioner_stop_delta_scale: 1.0
-  use_self_revision: true
-  use_macro_rupture: true
-  use_grounding_rupture: true
-  use_typed_rupture: true
+  belief_relax_penalty: 1.0
   phase1_iters: 10000
-  enable_phase2: false
   phase2_warmup_iters: 100
   efes_lr_phase1: 1.0e-4
   efes_lr_phase2: 5.0e-5
   etp_lr_phase2: 1.0e-5
-  lambda_plan: 0.05
-  lambda_self: 0.2
-  lambda_cons: 0.5
-  lambda_aux: 0.0
-  lambda_bind: 1.0
   lambda_kl: 1.0
-  lambda_node: 0.25
+  lambda_node: 0.5
   lambda_pi: 0.1
-  lambda_condition_kl: 0.0
-  lambda_condition_budget: 0.05
-  conditioner_gate_budget: 0.08
-  lambda_local: 1.0
-  lambda_topo: 1.0
-  lambda_prog: 1.0
-  lambda_clarity: 1.0
-  micro_free_nats: 3.0
-  micro_kl_cap: 20.0
+  lambda_boot_start: 0.5
+  lambda_boot_end: 0.0
   max_keep_checkpoints: 3
   grad_clip_norm: 5.0
   etp_unfreeze_keywords:

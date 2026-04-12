@@ -24,7 +24,6 @@ EVAL:
   USE_CKPT_CONFIG: False
   SPLIT: val_unseen
   EPISODE_COUNT: -1
-  EPISODE_ID_ALLOWLIST: ""
   LOG_EVERY_EPISODE: 1
   CKPT_PATH_DIR: ''
   fast_eval: False
@@ -46,7 +45,7 @@ IL:
   loc_noise: 0.5
   waypoint_aug: False
   ghost_aug: 0.0
-  back_algo: control
+  back_algo: teleport
   tryout: True
 
 MODEL:
@@ -90,19 +89,6 @@ EFES_SELF:
   tau_low: 1.0
   tau_high: 2.5
   stop_idx: 0
-  action_source: etp
-  conditioner_max_delta: 1.0
-  conditioner_gate_bias: -2.0
-  conditioner_mode: prob_mixture
-  conditioner_beta_max: 0.1
-  conditioner_prob_eps: 1.0e-8
-  conditioner_rupture_threshold: 0.75
-  conditioner_eligibility_temperature: 0.1
-  conditioner_stop_delta_scale: 1.0
-  use_self_revision: true
-  use_macro_rupture: true
-  use_grounding_rupture: true
-  use_typed_rupture: true
   phase1_iters: 10000
   enable_phase2: false
   phase2_warmup_iters: 100
@@ -117,9 +103,6 @@ EFES_SELF:
   lambda_kl: 1.0
   lambda_node: 0.25
   lambda_pi: 0.1
-  lambda_condition_kl: 0.0
-  lambda_condition_budget: 0.05
-  conditioner_gate_budget: 0.08
   lambda_local: 1.0
   lambda_topo: 1.0
   lambda_prog: 1.0

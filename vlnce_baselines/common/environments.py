@@ -646,14 +646,14 @@ class VLNCEDaggerEnv(habitat.RLEnv):
                 episode_id=self._env.current_episode.episode_id,
                 scene_id=self._env.current_episode.scene_id.split('/')[-1].split('.')[-2],
                 checkpoint_idx=0,
-                metrics={"SPL": round(info["spl"], 3)},
+                metrics={"SPL": round(float(info.get("spl", 0.0)), 3)},
                 tb_writer=None,
                 fps=8,
             )
             # for pano visualization
             metrics={
                         # "sr": round(info["success"], 3),
-                        "spl": round(info["spl"], 3),
+                        "spl": round(float(info.get("spl", 0.0)), 3),
                         # "ndtw": round(info["ndtw"], 3),
                         # "sdtw": round(info["sdtw"], 3),
                     }

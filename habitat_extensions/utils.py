@@ -648,23 +648,66 @@ def append_text_to_image(image: np.ndarray, text: str):
     final = np.concatenate((image, text_image), axis=0)
     return final
 
+def _rgb_frame_from_observations(observations: Dict[str, Any]) -> ndarray:
+    if all(uuid in observations for uuid in UUIDS_EQ):
+        cube = {uuid: observations.pop(uuid) for uuid in UUIDS_EQ}
+        cube = {k: torch.from_numpy(v).unsqueeze(0) for k, v in cube.items()}
+        eq = CUBE2EQ(cube)
+        rgb = eq["rgbback"][0].numpy().copy()
+    elif "rgb" in observations:
+        rgb = np.array(observations["rgb"]).copy()
+    else:
+        depth_key = "depth" if "depth" in observations else None
+        if depth_key is None:
+            raise KeyError(
+                "Video frame requires either cube RGB sensors "
+                f"{UUIDS_EQ} or a fallback 'rgb' observation."
+            )
+        depth = np.array(observations[depth_key]).copy()
+        if depth.ndim == 3 and depth.shape[-1] == 1:
+            depth = depth[..., 0]
+        depth = np.nan_to_num(depth, nan=0.0, posinf=1.0, neginf=0.0)
+        depth = np.clip(depth, 0.0, 1.0)
+        rgb = np.repeat((depth * 255.0).astype(np.uint8)[..., None], 3, axis=-1)
+
+    if rgb.ndim == 4:
+        rgb = rgb[0]
+    if rgb.ndim == 3 and rgb.shape[0] in (1, 3, 4) and rgb.shape[-1] not in (3, 4):
+        rgb = np.transpose(rgb, (1, 2, 0))
+    if rgb.ndim == 2:
+        rgb = np.repeat(rgb[..., None], 3, axis=-1)
+    if rgb.shape[-1] > 3:
+        rgb = rgb[..., :3]
+    if rgb.dtype != np.uint8:
+        scale = 255.0 if float(np.nanmax(rgb)) <= 1.0 else 1.0
+        rgb = np.clip(np.nan_to_num(rgb) * scale, 0, 255).astype(np.uint8)
+    return rgb
+
+
+def _append_topdown_if_available(
+    rgb: ndarray,
+    info: Dict[str, Any],
+    vis_info=None,
+    map_k: str = "top_down_map_vlnce",
+) -> ndarray:
+    if map_k not in info:
+        return rgb
+    top_down_map = colorize_draw_agent_and_fit_to_height(
+        info[map_k],
+        rgb.shape[0],
+        vis_info,
+    )
+    return np.concatenate([rgb, top_down_map], axis=1)
+
+
 def planner_video_frame(
     observations,
     info,
     vis_info=None,
     map_k="top_down_map_vlnce",
 ):
-    cube = {uuid: observations.pop(uuid) for uuid in UUIDS_EQ}
-    cube = {k: torch.from_numpy(v).unsqueeze(0) for k,v in cube.items()}
-    eq = CUBE2EQ(cube)
-    rgb = eq['rgbback'][0].numpy().copy()
-
-    top_down_map = colorize_draw_agent_and_fit_to_height(
-        info[map_k], 
-        rgb.shape[0], 
-        vis_info,
-    )
-    frame = np.concatenate([rgb, top_down_map], axis=1)
+    rgb = _rgb_frame_from_observations(observations)
+    frame = _append_topdown_if_available(rgb, info, vis_info, map_k)
     frame = cv2.copyMakeBorder(frame, 2,2,2,2, cv2.BORDER_CONSTANT, value=(0,0,0))
     frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
     # frame = append_text_to_image(frame, observations["instruction"]["text"])
@@ -696,18 +739,10 @@ def navigator_video_frame(
     #     (frame_width, new_height),
     #     interpolation=cv2.INTER_CUBIC,
     # )
-    cube = {uuid: observations.pop(uuid) for uuid in UUIDS_EQ}
-    cube = {k: torch.from_numpy(v).unsqueeze(0) for k,v in cube.items()}
-    eq = CUBE2EQ(cube)
-    rgb = eq['rgbback'][0].numpy().copy()
-
-    top_down_map = colorize_draw_agent_and_fit_to_height(
-        info[map_k], 
-        rgb.shape[0], 
-        vis_info,
-    )
-    frame = np.concatenate([rgb, top_down_map], axis=1)
-    frame = append_text_to_image(frame, observations["instruction"]["text"])
+    rgb = _rgb_frame_from_observations(observations)
+    frame = _append_topdown_if_available(rgb, info, vis_info, map_k)
+    if "instruction" in observations and "text" in observations["instruction"]:
+        frame = append_text_to_image(frame, observations["instruction"]["text"])
 
     return frame
 

@@ -8,7 +8,7 @@ export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-3}"
 stage="${1:-main}"
 mode="${2:-train}"
 MASTER_PORT="${3:-29541}"
-EXP_NAME="${4:-efes_r2r_${stage}}"
+EXP_NAME="${4:-efes_self_r2r_${stage}}"
 CKPT_PATH="${5:-}"
 PRED_FILE="${6:-preds.json}"
 if [ "$mode" = "infer" ]; then
@@ -18,9 +18,8 @@ else
 fi
 EXTRA_OPTS=("$@")
 
-EXP_CONFIG="run_r2r/efes/efes_main.yaml"
+EXP_CONFIG="run_r2r/efes_self/efes_self_main.yaml"
 STAGE_OPTS=()
-ACTION_SOURCE="etp"
 case "$stage" in
     main)
         ;;
@@ -31,67 +30,21 @@ case "$stage" in
             EFES_SELF.phase2_warmup_iters 200
         )
         ;;
-    active)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(EFES_SELF.action_source efes_safe)
-        ;;
-    hard)
-        ACTION_SOURCE="efes_hard"
-        STAGE_OPTS+=(EFES_SELF.action_source efes_hard)
-        ;;
-    passive)
-        ACTION_SOURCE="etp"
-        STAGE_OPTS+=(EFES_SELF.action_source etp)
-        ;;
-    no_action)
-        ACTION_SOURCE="etp"
-        STAGE_OPTS+=(EFES_SELF.action_source etp)
-        ;;
-    no_revision)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.use_self_revision False
-        )
-        ;;
-    no_typed)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.use_typed_rupture False
-        )
-        ;;
     no_macro)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.use_macro_rupture False
-            EFES_SELF.lambda_node 0.0
-            EFES_SELF.lambda_topo 0.0
-        )
+        STAGE_OPTS+=(EFES_SELF.lambda_node 0.0 EFES_SELF.lambda_topo 0.0)
         ;;
     no_grounding)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.use_grounding_rupture False
-            EFES_SELF.lambda_prog 0.0
-        )
+        STAGE_OPTS+=(EFES_SELF.lambda_prog 0.0)
         ;;
     no_confidence)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.lambda_clarity 0.0
-        )
+        STAGE_OPTS+=(EFES_SELF.lambda_clarity 0.0)
         ;;
     no_recovery)
-        ACTION_SOURCE="etp"
-        STAGE_OPTS+=(EFES_SELF.action_source etp)
+        STAGE_OPTS+=(EFES_SELF.lambda_plan 0.0)
         ;;
     *)
-        echo "Unknown EFES stage: $stage"
-        echo "Valid stages: main short active hard passive no_action no_revision no_typed no_macro no_grounding no_confidence no_recovery"
+        echo "Unknown EFESSelf stage: $stage"
+        echo "Valid stages: main short no_macro no_grounding no_confidence no_recovery"
         exit 1
         ;;
 esac
@@ -106,8 +59,7 @@ STEP_LOG_EVERY="${STEP_LOG_EVERY:-1}"
 USE_TQDM="${USE_TQDM:-True}"
 WRITE_STEP_METRICS="${WRITE_STEP_METRICS:-True}"
 LOG_FULL_MODEL_REPORT_TO_RUNTIME="${LOG_FULL_MODEL_REPORT_TO_RUNTIME:-False}"
-BACK_ALGO="${BACK_ALGO:-control}"
-echo "[EFES config] stage=$stage mode=$mode action_source=$ACTION_SOURCE back_algo=$BACK_ALGO stage_opts=${STAGE_OPTS[*]:-<none>}"
+BACK_ALGO="${BACK_ALGO:-}"
 
 build_relative_gpu_list() {
     local count="$1"
@@ -171,9 +123,6 @@ TRAIN_ARGS=(
 
 if [ -n "$CKPT_PATH" ]; then
     TRAIN_ARGS+=(IL.load_from_ckpt True IL.ckpt_to_load "$CKPT_PATH")
-fi
-if [ -n "$BACK_ALGO" ]; then
-    TRAIN_ARGS+=(IL.back_algo "$BACK_ALGO")
 fi
 if [ "${#EXTRA_OPTS[@]}" -gt 0 ]; then
     TRAIN_ARGS+=("${EXTRA_OPTS[@]}")

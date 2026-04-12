@@ -5,19 +5,21 @@ import torch.nn.functional as F
 from torch import Tensor, nn
 
 
-class MacroSurprise(nn.Module):
+class MacroSurpriseV2(nn.Module):
     def __init__(
         self,
         feat_dim: int = 768,
         num_heads: int = 8,
-        max_nodes: int = 50,
         sigma_min: float = 0.01,
+        diag_sigma_min: float = 0.05,
+        diag_sigma_max: float = 5.0,
         dropout: float = 0.1,
     ) -> None:
         super().__init__()
         self.feat_dim = int(feat_dim)
-        self.max_nodes = int(max_nodes)
         self.sigma_min = float(sigma_min)
+        self.diag_sigma_min = float(diag_sigma_min)
+        self.diag_sigma_max = float(diag_sigma_max)
         self.compressor = nn.Sequential(
             nn.Linear(self.feat_dim, self.feat_dim),
             nn.LayerNorm(self.feat_dim),
@@ -45,12 +47,11 @@ class MacroSurprise(nn.Module):
         if bank_feat.size(1) == 0:
             return s_t
         query = s_t.unsqueeze(1)
-        key_padding_mask = bank_mask.logical_not()
         attn_out, _ = self.retrieve_attn(
             query=query,
             key=bank_feat,
             value=bank_feat,
-            key_padding_mask=key_padding_mask,
+            key_padding_mask=bank_mask.logical_not(),
             need_weights=False,
         )
         return self.retrieve_norm(s_t + attn_out.squeeze(1))
@@ -60,17 +61,32 @@ class MacroSurprise(nn.Module):
         sigma2 = F.softplus(raw_sigma) + self.sigma_min
         return mu_pred, sigma2
 
-    @staticmethod
-    def gaussian_nll(
-        real_feat: Tensor,
-        mu_pred: Tensor,
-        sigma2: Tensor,
-        valid_mask: Tensor | None = None,
-    ) -> Tensor:
-        value = (((real_feat - mu_pred).square() / sigma2) + sigma2.log()).sum(dim=-1)
-        if valid_mask is None:
-            return value
-        return value * valid_mask.to(dtype=value.dtype)
+    def forward(
+        self,
+        node_feat: Tensor,
+        topo_context: Tensor,
+        bank_feat: Tensor,
+        bank_mask: Tensor,
+        macro_valid_mask: Tensor,
+    ) -> dict[str, Tensor]:
+        x_comp = self.compress(node_feat)
+        mu_pred, sigma2 = self.predict(topo_context)
+        sq_error = (x_comp.detach() - mu_pred).square()
+        node_nll_loss = 0.5 * ((sq_error / sigma2) + sigma2.log()).mean(dim=-1)
+        sigma2_diag = sigma2.detach().clamp(min=self.diag_sigma_min, max=self.diag_sigma_max)
+        c_macro_diag = ((x_comp.detach() - mu_pred.detach()).square() / sigma2_diag).mean(dim=-1)
+        c_macro_diag = c_macro_diag * macro_valid_mask.to(dtype=c_macro_diag.dtype)
+        u_macro = sigma2.detach().log().mean(dim=-1)
+        topo_novelty = self.cosine_novelty(x_comp.detach(), bank_feat, bank_mask)
+        return {
+            "x_comp": x_comp,
+            "mu_pred": mu_pred,
+            "sigma2": sigma2,
+            "node_nll_loss": node_nll_loss * macro_valid_mask.to(dtype=node_nll_loss.dtype),
+            "c_macro_diag": c_macro_diag,
+            "u_macro": u_macro,
+            "topo_novelty": topo_novelty,
+        }
 
     @staticmethod
     def cosine_novelty(current_feat: Tensor, reference_feat: Tensor, valid_mask: Tensor) -> Tensor:
@@ -83,5 +99,4 @@ class MacroSurprise(nn.Module):
         best_sim, _ = sims.max(dim=-1)
         novelty = (1.0 - best_sim).clamp_min(0.0)
         no_ref = valid_mask.sum(dim=-1).eq(0)
-        novelty = torch.where(no_ref, torch.zeros_like(novelty), novelty)
-        return novelty
+        return torch.where(no_ref, torch.zeros_like(novelty), novelty)

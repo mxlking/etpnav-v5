@@ -8,7 +8,7 @@ export TF_CPP_MIN_LOG_LEVEL="${TF_CPP_MIN_LOG_LEVEL:-3}"
 stage="${1:-main}"
 mode="${2:-train}"
 MASTER_PORT="${3:-29541}"
-EXP_NAME="${4:-efes_r2r_${stage}}"
+EXP_NAME="${4:-efes_v2_r2r_${stage}}"
 CKPT_PATH="${5:-}"
 PRED_FILE="${6:-preds.json}"
 if [ "$mode" = "infer" ]; then
@@ -18,80 +18,32 @@ else
 fi
 EXTRA_OPTS=("$@")
 
-EXP_CONFIG="run_r2r/efes/efes_main.yaml"
+EXP_CONFIG="run_r2r/efes_v2/efes_v2_main.yaml"
 STAGE_OPTS=()
-ACTION_SOURCE="etp"
 case "$stage" in
     main)
         ;;
     short)
         STAGE_OPTS+=(
             IL.iters 6000
-            EFES_SELF.phase1_iters 2000
-            EFES_SELF.phase2_warmup_iters 200
-        )
-        ;;
-    active)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(EFES_SELF.action_source efes_safe)
-        ;;
-    hard)
-        ACTION_SOURCE="efes_hard"
-        STAGE_OPTS+=(EFES_SELF.action_source efes_hard)
-        ;;
-    passive)
-        ACTION_SOURCE="etp"
-        STAGE_OPTS+=(EFES_SELF.action_source etp)
-        ;;
-    no_action)
-        ACTION_SOURCE="etp"
-        STAGE_OPTS+=(EFES_SELF.action_source etp)
-        ;;
-    no_revision)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.use_self_revision False
-        )
-        ;;
-    no_typed)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.use_typed_rupture False
+            EFES_V2.phase1_iters 2000
+            EFES_V2.phase2_warmup_iters 200
         )
         ;;
     no_macro)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.use_macro_rupture False
-            EFES_SELF.lambda_node 0.0
-            EFES_SELF.lambda_topo 0.0
-        )
+        STAGE_OPTS+=(EFES_V2.lambda_node 0.0)
         ;;
     no_grounding)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.use_grounding_rupture False
-            EFES_SELF.lambda_prog 0.0
-        )
         ;;
     no_confidence)
-        ACTION_SOURCE="efes_safe"
-        STAGE_OPTS+=(
-            EFES_SELF.action_source efes_safe
-            EFES_SELF.lambda_clarity 0.0
-        )
+        STAGE_OPTS+=(EFES_V2.lambda_pi 0.0)
         ;;
     no_recovery)
-        ACTION_SOURCE="etp"
-        STAGE_OPTS+=(EFES_SELF.action_source etp)
+        STAGE_OPTS+=(EFES_V2.lambda_boot_start 0.0 EFES_V2.lambda_boot_end 0.0)
         ;;
     *)
-        echo "Unknown EFES stage: $stage"
-        echo "Valid stages: main short active hard passive no_action no_revision no_typed no_macro no_grounding no_confidence no_recovery"
+        echo "Unknown EFESV2 stage: $stage"
+        echo "Valid stages: main short no_macro no_grounding no_confidence no_recovery"
         exit 1
         ;;
 esac
@@ -106,8 +58,7 @@ STEP_LOG_EVERY="${STEP_LOG_EVERY:-1}"
 USE_TQDM="${USE_TQDM:-True}"
 WRITE_STEP_METRICS="${WRITE_STEP_METRICS:-True}"
 LOG_FULL_MODEL_REPORT_TO_RUNTIME="${LOG_FULL_MODEL_REPORT_TO_RUNTIME:-False}"
-BACK_ALGO="${BACK_ALGO:-control}"
-echo "[EFES config] stage=$stage mode=$mode action_source=$ACTION_SOURCE back_algo=$BACK_ALGO stage_opts=${STAGE_OPTS[*]:-<none>}"
+BACK_ALGO="${BACK_ALGO:-}"
 
 build_relative_gpu_list() {
     local count="$1"
@@ -152,10 +103,10 @@ COMMON_GPU_ARGS=(
 
 COMMON_LOGGING_ARGS=(
     IL.log_every "$IL_LOG_EVERY"
-    EFES_SELF.LOGGING.step_log_every "$STEP_LOG_EVERY"
-    EFES_SELF.LOGGING.use_tqdm "$USE_TQDM"
-    EFES_SELF.LOGGING.write_step_metrics "$WRITE_STEP_METRICS"
-    EFES_SELF.LOGGING.log_full_model_report_to_runtime "$LOG_FULL_MODEL_REPORT_TO_RUNTIME"
+    EFES_V2.LOGGING.step_log_every "$STEP_LOG_EVERY"
+    EFES_V2.LOGGING.use_tqdm "$USE_TQDM"
+    EFES_V2.LOGGING.write_step_metrics "$WRITE_STEP_METRICS"
+    EFES_V2.LOGGING.log_full_model_report_to_runtime "$LOG_FULL_MODEL_REPORT_TO_RUNTIME"
 )
 
 TRAIN_ARGS=(
@@ -171,9 +122,6 @@ TRAIN_ARGS=(
 
 if [ -n "$CKPT_PATH" ]; then
     TRAIN_ARGS+=(IL.load_from_ckpt True IL.ckpt_to_load "$CKPT_PATH")
-fi
-if [ -n "$BACK_ALGO" ]; then
-    TRAIN_ARGS+=(IL.back_algo "$BACK_ALGO")
 fi
 if [ "${#EXTRA_OPTS[@]}" -gt 0 ]; then
     TRAIN_ARGS+=("${EXTRA_OPTS[@]}")
@@ -242,11 +190,6 @@ case "$mode" in
             echo "eval mode requires CKPT_PATH"
             exit 1
         fi
-        if [ ! -f "$CKPT_PATH" ]; then
-            echo "eval mode requires an existing checkpoint file: $CKPT_PATH"
-            exit 1
-        fi
-        echo "[EFES eval] using checkpoint: $CKPT_PATH"
         if [ "$NPROC" -eq 1 ]; then
             run_single "${EVAL_ARGS[@]}"
         else
@@ -258,11 +201,6 @@ case "$mode" in
             echo "infer mode requires CKPT_PATH"
             exit 1
         fi
-        if [ ! -f "$CKPT_PATH" ]; then
-            echo "infer mode requires an existing checkpoint file: $CKPT_PATH"
-            exit 1
-        fi
-        echo "[EFES infer] using checkpoint: $CKPT_PATH"
         if [ "$NPROC" -eq 1 ]; then
             run_single "${INFER_ARGS[@]}"
         else

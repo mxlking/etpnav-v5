@@ -207,6 +207,43 @@ class BaseVLNCETrainer(BaseILTrainer):
         # 新加: 统一兼容旧 checkpoint 在新 PyTorch 下的加载行为。
         return load_torch_checkpoint_compat(checkpoint_path, *args, **kwargs)
 
+    def _collect_checkpoint_result_metadata(self, context: str) -> Dict:
+        metadata = {}
+        getter = getattr(self, "_get_eval_result_metadata", None)
+        if callable(getter):
+            try:
+                metadata = getter()
+            except Exception as exc:
+                logger.warning(
+                    "Failed to collect checkpoint result metadata for %s: %s",
+                    context,
+                    exc,
+                )
+                metadata = {}
+        if not isinstance(metadata, dict) or not metadata:
+            fallback = getattr(self, "_last_checkpoint_fingerprint", None)
+            if isinstance(fallback, dict):
+                metadata = dict(fallback)
+        if not isinstance(metadata, dict) or not metadata:
+            return {}
+        payload = dict(metadata)
+        payload["result_context"] = context
+        return payload
+
+    def _write_checkpoint_result_metadata(self, output_path: str, metadata: Dict) -> None:
+        if not metadata:
+            return
+        try:
+            with open(output_path, "w") as f:
+                json.dump(metadata, f, indent=2, sort_keys=True)
+            logger.info("Saved checkpoint metadata: %s", output_path)
+        except OSError as exc:
+            logger.warning(
+                "Failed to save checkpoint metadata under %s: %s",
+                output_path,
+                exc,
+            )
+
     # def _update_agent(
     #     self,
     #     observations,
@@ -764,6 +801,17 @@ class BaseVLNCETrainer(BaseILTrainer):
                 aggregated_stats[k] = v
 
         split = config.TASK_CONFIG.DATASET.SPLIT
+        checkpoint_metadata = self._collect_checkpoint_result_metadata("eval")
+        if checkpoint_metadata:
+            checkpoint_metadata.update(
+                {
+                    "split": split,
+                    "checkpoint_index": int(checkpoint_index),
+                    "world_size": int(self.world_size),
+                    "local_rank": int(self.local_rank),
+                    "episodes_evaluated": int(total),
+                }
+            )
 
         if self.local_rank < 1:
             logger.info(f"Episodes evaluated: {total}")
@@ -780,6 +828,10 @@ class BaseVLNCETrainer(BaseILTrainer):
             )
             with open(fname, "w") as f:
                 json.dump(stats_episodes, f, indent=4)
+            self._write_checkpoint_result_metadata(
+                fname.replace(".json", ".meta.json"),
+                checkpoint_metadata,
+            )
 
             if self.local_rank < 1 and config.EVAL.SAVE_RESULTS:
                 fname = os.path.join(
@@ -788,6 +840,10 @@ class BaseVLNCETrainer(BaseILTrainer):
                 )
                 with open(fname, "w") as f:
                     json.dump(aggregated_stats, f, indent=4)
+                self._write_checkpoint_result_metadata(
+                    fname.replace(".json", ".meta.json"),
+                    checkpoint_metadata,
+                )
         except OSError as exc:
             logger.warning(
                 "Failed to save eval results under %s: %s",
@@ -1304,10 +1360,24 @@ class BaseVLNCETrainer(BaseILTrainer):
 
         pred_dir = os.path.dirname(config.INFERENCE.PREDICTIONS_FILE) or "."
         os.makedirs(pred_dir, exist_ok=True)
+        inference_metadata = self._collect_checkpoint_result_metadata("inference")
+        if inference_metadata:
+            inference_metadata.update(
+                {
+                    "split": str(config.INFERENCE.SPLIT),
+                    "prediction_format": str(config.INFERENCE.FORMAT),
+                    "predictions_file": str(config.INFERENCE.PREDICTIONS_FILE),
+                    "episodes_predicted": int(len(episode_predictions)),
+                }
+            )
 
         if config.INFERENCE.FORMAT == "r2r":
             with open(config.INFERENCE.PREDICTIONS_FILE, "w") as f:
                 json.dump(episode_predictions, f, indent=2)
+            self._write_checkpoint_result_metadata(
+                "{}.meta.json".format(config.INFERENCE.PREDICTIONS_FILE),
+                inference_metadata,
+            )
 
             logger.info(
                 f"Predictions saved to: {config.INFERENCE.PREDICTIONS_FILE}"
@@ -1335,6 +1405,10 @@ class BaseVLNCETrainer(BaseILTrainer):
                 config.INFERENCE.PREDICTIONS_FILE, mode="w"
             ) as writer:
                 writer.write_all(predictions_out)
+            self._write_checkpoint_result_metadata(
+                "{}.meta.json".format(config.INFERENCE.PREDICTIONS_FILE),
+                inference_metadata,
+            )
 
             logger.info(
                 f"Predictions saved to: {config.INFERENCE.PREDICTIONS_FILE}"

@@ -36,6 +36,11 @@ class DualRecovery(nn.Module):
         mode = torch.full((batch,), self.PROCEED, dtype=torch.long, device=device)
         alpha_prior = torch.ones(batch, device=device, dtype=s_t.dtype)
         alpha_progress = torch.ones(batch, device=device, dtype=s_t.dtype)
+        # Always evaluate the modulation head so its parameters stay in the
+        # autograd/DDP graph on every step, even when no sample enters a
+        # recovery branch on a given rank.
+        alphas = self.belief_mod(torch.cat([s_t, a_t.unsqueeze(-1), pi_t.unsqueeze(-1)], dim=-1))
+        alphas = alphas.to(dtype=alpha_prior.dtype)
 
         high_mask = a_t >= self.tau_high
         mid_mask = (a_t >= self.tau_low) & (~high_mask)
@@ -47,12 +52,11 @@ class DualRecovery(nn.Module):
         mode[high_mask] = self.BACKTRACK
 
         mod_mask = belief_mask | high_mask
-        if bool(mod_mask.any().item()):
-            alphas = self.belief_mod(torch.cat([s_t, a_t.unsqueeze(-1), pi_t.unsqueeze(-1)], dim=-1))
-            alphas = alphas.to(dtype=alpha_prior.dtype)
-            alpha_prior[mod_mask] = alphas[mod_mask, 0]
-            alpha_progress[mod_mask] = alphas[mod_mask, 1]
-            alpha_progress[high_mask] = 0.0
+        alpha_prior = torch.where(mod_mask, alphas[:, 0], alpha_prior)
+        alpha_progress = torch.where(mod_mask, alphas[:, 1], alpha_progress)
+        alpha_progress = torch.where(high_mask, torch.zeros_like(alpha_progress), alpha_progress)
+        alpha_prior = alpha_prior + (alphas[:, 0] * 0.0)
+        alpha_progress = alpha_progress + (alphas[:, 1] * 0.0)
 
         return {
             "recovery_mode": mode,

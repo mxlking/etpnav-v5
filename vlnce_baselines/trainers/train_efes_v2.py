@@ -50,17 +50,17 @@ from habitat_baselines.common.obs_transformers import apply_obs_transforms_batch
 
 from fastdtw import fastdtw
 from habitat_extensions.measures import NDTW
-from vlnce_baselines.agents.efes_agent import EFESAgent
+from vlnce_baselines.agents.efes_v2_agent import EFESV2Agent
 from vlnce_baselines.common.utils import extract_instruction_tokens
 from vlnce_baselines.datasets.state_label_builder import StateLabelBuilder
-from vlnce_baselines.models.efes.topo_state_bank import TopoStateBank
+from vlnce_baselines.models.efes_v2.topo_state_bank import TopoStateBankV2
 from vlnce_baselines.models.graph_utils import GraphMap
 from vlnce_baselines.trainers.train_statenav_v6_stage1 import StateNavV6Trainer, _state_model
 
 
-@baseline_registry.register_trainer(name="EFES")
-class EFESTrainer(StateNavV6Trainer):
-    stage_name = "EFES"
+@baseline_registry.register_trainer(name="EFESV2")
+class EFESV2Trainer(StateNavV6Trainer):
+    stage_name = "EFESV2"
 
     def __init__(self, config=None):
         super().__init__(config)
@@ -70,12 +70,13 @@ class EFESTrainer(StateNavV6Trainer):
         self._c_micro_median_value = 10.0
         self._c_micro_refresh_counter = 0
         self._efes_optimizer_group_names: List[str] = []
+        self._router_boot_weight = 0.0
 
     def _efes_cfg(self):
-        return self.config.EFES
+        return self.config.EFES_V2
 
     def _logging_cfg(self):
-        return self.config.EFES.LOGGING
+        return self.config.EFES_V2.LOGGING
 
     def _log_prior_post_metrics_enabled(self) -> bool:
         return bool(getattr(self._logging_cfg(), "log_diag_metrics", True))
@@ -92,7 +93,7 @@ class EFESTrainer(StateNavV6Trainer):
         else:
             etp_dim = self.policy.net.output_size
 
-        self.statenav_agent = EFESAgent.from_config(
+        self.statenav_agent = EFESV2Agent.from_config(
             self.config,
             x_dim=etp_dim,
             lang_dim=etp_dim,
@@ -195,17 +196,21 @@ class EFESTrainer(StateNavV6Trainer):
             "total_loss",
             "plan_loss",
             "kl_loss",
-            "node_loss",
-            "cal_loss",
+            "node_nll_loss",
+            "pi_cal_loss",
+            "router_boot_loss",
             "total_actions",
             "total_macro_updates",
             "c_micro_mean",
-            "c_macro_mean",
+            "c_macro_diag_mean",
+            "u_macro_mean",
             "g_t_mean",
             "a_t_mean",
             "pi_t_mean",
             "macro_valid_ratio",
-            "recovery_mode_hist",
+            "mode_entropy_mean",
+            "mode_hist_argmax",
+            "etp_unfrozen_grad_norm",
             "train_step_sec",
             "rollout_sec",
             "backward_sec",
@@ -240,8 +245,8 @@ class EFESTrainer(StateNavV6Trainer):
         if int(record["iteration"]) % step_log_every != 0:
             return
         logger.info(
-            "[EFES %s %06d/%06d | interval %03d/%03d] total=%.4f plan=%.4f kl=%.4f node=%.4f cal=%.4f grad=%.4f lr=%.2e"
-            " | c=%.3f/%.3f g=%.3f A=%.3f pi=%.3f macro=%.3f modes=%s"
+            "[EFESV2 %s %06d/%06d | interval %03d/%03d] total=%.4f plan=%.4f kl=%.4f node_nll=%.4f pi_cal=%.4f boot=%.4f grad=%.4f lr=%.2e"
+            " | c=%.3f/%.3f u=%.3f g=%.3f A=%.3f pi=%.3f macro=%.3f modeH=%.3f modes=%s etp=%.4f"
             " | sec(step=%.2f roll=%.2f bw=%.2f opt=%.2f lang=%.2f wp=%.2f pano=%.2f nav=%.2f efes=%.2f env=%.2f prep=%.2f)",
             str(record.get("phase", "phase1")),
             int(record["iteration"]),
@@ -251,17 +256,21 @@ class EFESTrainer(StateNavV6Trainer):
             float(record.get("total_loss", 0.0)),
             float(record.get("plan_loss", 0.0)),
             float(record.get("kl_loss", 0.0)),
-            float(record.get("node_loss", 0.0)),
-            float(record.get("cal_loss", 0.0)),
+            float(record.get("node_nll_loss", 0.0)),
+            float(record.get("pi_cal_loss", 0.0)),
+            float(record.get("router_boot_loss", 0.0)),
             float(record.get("grad_norm", 0.0)),
             float(record.get("lr", 0.0)),
             float(record.get("c_micro_mean", 0.0)),
-            float(record.get("c_macro_mean", 0.0)),
+            float(record.get("c_macro_diag_mean", 0.0)),
+            float(record.get("u_macro_mean", 0.0)),
             float(record.get("g_t_mean", 0.0)),
             float(record.get("a_t_mean", 0.0)),
             float(record.get("pi_t_mean", 0.0)),
             float(record.get("macro_valid_ratio", 0.0)),
-            str(record.get("recovery_mode_hist", "-")),
+            float(record.get("mode_entropy_mean", 0.0)),
+            str(record.get("mode_hist_argmax", "-")),
+            float(record.get("etp_unfrozen_grad_norm", 0.0)),
             float(record.get("train_step_sec", 0.0)),
             float(record.get("rollout_sec", 0.0)),
             float(record.get("backward_sec", 0.0)),
@@ -344,7 +353,7 @@ class EFESTrainer(StateNavV6Trainer):
 
         self._prepare_step_metric_writer()
 
-        logger.info("EFES training starts...")
+        logger.info("EFES-v2 training starts...")
         for idx in range(start_iter, total_iter, log_every):
             self._maybe_activate_phase2()
             interval = min(log_every, max(total_iter - idx, 0))
@@ -361,7 +370,7 @@ class EFESTrainer(StateNavV6Trainer):
                     if is_best:
                         self.best_metric = total_metric
                 logger.info(
-                    "[EFES summary %06d | %s] %s",
+                    "[EFES-v2 summary %06d | %s] %s",
                     cur_iter,
                     self._phase_name,
                     ", ".join(f"{k}: {v:.4f}" for k, v in summary.items()),
@@ -371,13 +380,16 @@ class EFESTrainer(StateNavV6Trainer):
                 self.save_checkpoint(cur_iter, is_best=is_best)
 
     def _train_interval(self, interval, ml_weight, sample_ratio):
-        self.policy.eval()
+        if self._phase2_started:
+            self.policy.train()
+        else:
+            self.policy.eval()
         self.statenav_agent.train()
         self.waypoint_predictor.eval()
 
         use_tqdm = bool(self._logging_cfg().use_tqdm) and self._is_main_process()
         pbar = (
-            tqdm.trange(interval, leave=False, dynamic_ncols=True, desc=f"EFES {self._phase_name}")
+            tqdm.trange(interval, leave=False, dynamic_ncols=True, desc=f"EFESV2 {self._phase_name}")
             if use_tqdm
             else range(interval)
         )
@@ -397,12 +409,22 @@ class EFESTrainer(StateNavV6Trainer):
             self.scaler.scale(self.loss).backward()
             self.scaler.unscale_(self.optimizer)
             trainable_params = []
+            unfrozen_etp_params = []
             for group in self.optimizer.param_groups:
                 trainable_params.extend([param for param in group["params"] if param.grad is not None])
+                if str(group.get("group_name", "")) == "etp":
+                    unfrozen_etp_params.extend([param for param in group["params"] if param.grad is not None])
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 trainable_params,
                 max_norm=float(self._efes_cfg().grad_clip_norm),
             )
+            if unfrozen_etp_params:
+                etp_unfrozen_grad_norm = torch.norm(
+                    torch.stack([param.grad.detach().norm(2) for param in unfrozen_etp_params]),
+                    2,
+                )
+            else:
+                etp_unfrozen_grad_norm = torch.zeros((), device=self.device)
             backward_sec = self._timing_now() - backward_start
 
             optimizer_start = self._timing_now()
@@ -418,6 +440,7 @@ class EFESTrainer(StateNavV6Trainer):
                     "rollout_sec": float(rollout_sec),
                     "backward_sec": float(backward_sec),
                     "optimizer_sec": float(optimizer_sec),
+                    "etp_unfrozen_grad_norm": float(etp_unfrozen_grad_norm.detach().item()),
                 }
             )
 
@@ -454,6 +477,15 @@ class EFESTrainer(StateNavV6Trainer):
         if self._c_micro_refresh_counter >= 100:
             self._refresh_c_micro_median()
             self._c_micro_refresh_counter = 0
+
+    def _compute_router_boot_weight(self) -> float:
+        phase1_iters = max(int(self._efes_cfg().phase1_iters), 1)
+        if self._phase2_started:
+            return float(self._efes_cfg().lambda_boot_end)
+        progress = min(max(float(self._train_iteration) / float(phase1_iters), 0.0), 1.0)
+        start = float(self._efes_cfg().lambda_boot_start)
+        end = float(self._efes_cfg().lambda_boot_end)
+        return start + (end - start) * progress
 
     def _grounding_inputs(
         self,
@@ -528,9 +560,11 @@ class EFESTrainer(StateNavV6Trainer):
             self.statenav_agent.train()
         else:
             self.statenav_agent.eval()
+        policy_grad_enabled = bool(mode == "train" and self._phase2_started)
+        policy_ctx = torch.enable_grad if policy_grad_enabled else torch.no_grad
 
         lang_start = self._timing_now()
-        with torch.no_grad():
+        with policy_ctx():
             all_txt_ids = batch["instruction"]
             all_txt_masks = all_txt_ids != instr_pad_id
             all_txt_embeds = self.policy.net(
@@ -555,16 +589,19 @@ class EFESTrainer(StateNavV6Trainer):
         total_macro_updates = 0
         plan_loss_sum = torch.zeros((), device=self.device)
         kl_loss_sum = torch.zeros((), device=self.device)
-        node_loss_sum = torch.zeros((), device=self.device)
-        cal_loss_sum = torch.zeros((), device=self.device)
+        node_nll_sum = torch.zeros((), device=self.device)
+        pi_cal_loss_sum = torch.zeros((), device=self.device)
+        router_boot_loss_sum = torch.zeros((), device=self.device)
         ddp_anchor_sum = torch.zeros((), device=self.device)
         c_micro_sum = torch.zeros((), device=self.device)
-        c_macro_sum = torch.zeros((), device=self.device)
+        c_macro_diag_sum = torch.zeros((), device=self.device)
+        u_macro_sum = torch.zeros((), device=self.device)
         g_t_sum = torch.zeros((), device=self.device)
         a_t_sum = torch.zeros((), device=self.device)
         pi_t_sum = torch.zeros((), device=self.device)
         macro_valid_sum = torch.zeros((), device=self.device)
         mode_count_sum = torch.zeros(4, device=self.device)
+        mode_entropy_sum = torch.zeros((), device=self.device)
 
         not_done_index = list(range(self.envs.num_envs))
         have_real_pos = mode == "train" or self.config.VIDEO_OPTION
@@ -581,7 +618,7 @@ class EFESTrainer(StateNavV6Trainer):
         prev_vp = [None] * self.envs.num_envs
         state_model = _state_model(self.statenav_agent)
         recurrent_state = state_model.init_recurrent_state(self.envs.num_envs, self.device)
-        topo_bank = TopoStateBank.create(
+        topo_bank = TopoStateBankV2.create(
             num_envs=self.envs.num_envs,
             max_nodes=int(self._efes_cfg().max_nodes),
             feat_dim=int(state_model.x_dim),
@@ -589,6 +626,9 @@ class EFESTrainer(StateNavV6Trainer):
         )
         active_backtrack_histories = [dict() for _ in range(self.envs.num_envs)]
         active_c_micro_histories = [
+            deque(maxlen=int(self._efes_cfg().history_window)) for _ in range(self.envs.num_envs)
+        ]
+        active_c_macro_histories = [
             deque(maxlen=int(self._efes_cfg().history_window)) for _ in range(self.envs.num_envs)
         ]
         active_progress_histories = [
@@ -600,7 +640,7 @@ class EFESTrainer(StateNavV6Trainer):
         active_vp_histories = [
             deque(maxlen=int(self._efes_cfg().history_window)) for _ in range(self.envs.num_envs)
         ]
-        active_pending_pi: List[Optional[Tensor]] = [None for _ in range(self.envs.num_envs)]
+        active_pending_pi: List[List[Dict[str, Any]]] = [[] for _ in range(self.envs.num_envs)]
         active_eval_diag = [
             {"a_t": [], "c_micro": [], "c_macro": [], "g_t": [], "pi_t": [], "macro_valid": []}
             for _ in range(self.envs.num_envs)
@@ -611,7 +651,7 @@ class EFESTrainer(StateNavV6Trainer):
             txt_masks = all_txt_masks[not_done_index]
             txt_embeds = all_txt_embeds[not_done_index]
 
-            with torch.no_grad():
+            with policy_ctx():
                 waypoint_start = self._timing_now()
                 wp_outputs = self.policy.net(
                     mode="waypoint",
@@ -708,18 +748,48 @@ class EFESTrainer(StateNavV6Trainer):
                 device=self.device,
                 dtype=torch.long,
             )
+            current_comp_feat = state_model.macro_surprise.compress(avg_pano_embeds).detach()
+            current_topo_novelty = state_model.macro_surprise.cosine_novelty(
+                current_comp_feat,
+                topo_bank.bank_feat,
+                topo_bank.bank_mask,
+            )
             topo_update_mask = topo_bank.build_update_mask(
                 current_vp_ids=cur_vp,
                 candidate_counts=candidate_counts,
                 current_step=stepk + 1,
+                topo_novelty=current_topo_novelty,
                 decision_candidate_min=int(self._efes_cfg().node_decision_candidate_min),
                 timeout_steps=int(self._efes_cfg().timeout_steps),
+                novelty_threshold=float(self._efes_cfg().novelty_threshold),
+                cooldown_steps=int(self._efes_cfg().cooldown_steps),
             )
             c_micro_recent_mean = torch.tensor(
                 [self._history_mean(history) for history in active_c_micro_histories],
                 device=self.device,
                 dtype=avg_pano_embeds.dtype,
             )
+            c_macro_recent_mean = torch.tensor(
+                [self._history_mean(history) for history in active_c_macro_histories],
+                device=self.device,
+                dtype=avg_pano_embeds.dtype,
+            )
+            revisit_count = torch.tensor(
+                [float(sum(1 for vp in history if vp == cur_vp_i)) for history, cur_vp_i in zip(active_vp_histories, cur_vp)],
+                device=self.device,
+                dtype=avg_pano_embeds.dtype,
+            )
+            loop_evidence = torch.tensor(
+                [
+                    1.0
+                    if (cur_vp_i is not None and cur_vp_i in history and self._unique_vp_delta(history, cur_vp_i) <= 1)
+                    else 0.0
+                    for history, cur_vp_i in zip(active_vp_histories, cur_vp)
+                ],
+                device=self.device,
+                dtype=avg_pano_embeds.dtype,
+            )
+            frontier_size = frontier_candidate_mask.to(avg_pano_embeds.dtype).sum(dim=-1)
             ground_progress_ref, ground_is_static = self._grounding_inputs(
                 progress_history=active_progress_histories,
                 pos_history=active_pos_histories,
@@ -742,13 +812,19 @@ class EFESTrainer(StateNavV6Trainer):
                 prev_rssm_h=recurrent_state["prev_rssm_h"],
                 prev_progress=recurrent_state["prev_progress"],
                 prev_prior_alpha=recurrent_state["prev_prior_alpha"],
+                prev_topo_novelty=recurrent_state["prev_topo_novelty"],
+                prev_progress_gap=recurrent_state["prev_progress_gap"],
                 c_micro_recent_mean=c_micro_recent_mean,
+                c_macro_recent_mean=c_macro_recent_mean,
                 ground_progress_ref=ground_progress_ref,
                 ground_is_static=ground_is_static,
                 topo_bank_feat=topo_bank.bank_feat,
                 topo_bank_mask=topo_bank.bank_mask,
-                topo_update_mask=topo_update_mask,
+                macro_valid_mask=topo_update_mask,
                 candidate_mask=candidate_mask,
+                frontier_size=frontier_size,
+                revisit_count=revisit_count,
+                loop_evidence=loop_evidence,
                 history_backtrack_values=history_backtrack_values,
                 history_valid_mask=history_valid_mask,
                 frontier_mask=frontier_candidate_mask,
@@ -767,20 +843,22 @@ class EFESTrainer(StateNavV6Trainer):
             c_micro_sum = c_micro_sum + step_outs["C_micro"].sum()
             macro_valid_mask = step_outs["macro_valid_mask"]
             if bool(macro_valid_mask.any().item()):
-                c_macro_sum = c_macro_sum + step_outs["C_macro"][macro_valid_mask].sum()
+                c_macro_diag_sum = c_macro_diag_sum + step_outs["C_macro_diag"][macro_valid_mask].sum()
             g_t_sum = g_t_sum + step_outs["g_t"].sum()
             a_t_sum = a_t_sum + step_outs["A_t"].sum()
             pi_t_sum = pi_t_sum + step_outs["pi_t"].sum()
+            u_macro_sum = u_macro_sum + step_outs["U_macro"].sum()
             macro_valid_sum = macro_valid_sum + macro_valid_mask.to(torch.float32).sum()
             total_macro_updates += int(macro_valid_mask.sum().item())
+            mode_entropy_sum = mode_entropy_sum + step_outs["mode_entropy"].sum()
             for mode_idx in range(4):
-                mode_count_sum[mode_idx] = mode_count_sum[mode_idx] + step_outs["recovery_mode"].eq(mode_idx).sum()
+                mode_count_sum[mode_idx] = mode_count_sum[mode_idx] + step_outs["argmax_mode"].eq(mode_idx).sum()
 
             if mode == "eval" and active_eval_diag is not None:
                 for i in range(self.envs.num_envs):
                     active_eval_diag[i]["a_t"].append(float(step_outs["A_t"][i].detach().item()))
                     active_eval_diag[i]["c_micro"].append(float(step_outs["C_micro"][i].detach().item()))
-                    active_eval_diag[i]["c_macro"].append(float(step_outs["C_macro"][i].detach().item()))
+                    active_eval_diag[i]["c_macro"].append(float(step_outs["C_macro_diag"][i].detach().item()))
                     active_eval_diag[i]["g_t"].append(float(step_outs["g_t"][i].detach().item()))
                     active_eval_diag[i]["pi_t"].append(float(step_outs["pi_t"][i].detach().item()))
                     active_eval_diag[i]["macro_valid"].append(float(step_outs["macro_valid_mask"][i].detach().item()))
@@ -790,8 +868,7 @@ class EFESTrainer(StateNavV6Trainer):
             else:
                 teacher_actions = None
 
-            use_recovery_scores = not (mode == "train" and not self._phase2_started)
-            behavior_logits = step_outs["rescored_candidate_scores"] if use_recovery_scores else nav_logits
+            behavior_logits = step_outs["fused_logits"] if mode == "train" else step_outs["hard_logits"]
             nav_probs = F.softmax(behavior_logits, dim=1)
             for i, gmap in enumerate(self.gmaps):
                 gmap.node_stop_scores[cur_vp[i]] = nav_probs[i, 0].detach().item()
@@ -810,8 +887,8 @@ class EFESTrainer(StateNavV6Trainer):
                     reduction="sum",
                 )
                 kl_loss_sum = kl_loss_sum + step_outs["C_micro"].clamp_min(3.0).sum()
-                node_weight = step_outs["macro_valid_mask"].to(dtype=step_outs["C_macro"].dtype)
-                node_loss_sum = node_loss_sum + (step_outs["C_macro"] * node_weight).sum()
+                node_weight = step_outs["macro_valid_mask"].to(dtype=step_outs["node_nll_loss"].dtype)
+                node_nll_sum = node_nll_sum + (step_outs["node_nll_loss"] * node_weight).sum()
                 ddp_anchor_sum = ddp_anchor_sum + (
                     0.0 * step_outs["pi_t"].sum()
                     + 0.0 * step_outs["alpha_prior"].sum()
@@ -819,23 +896,35 @@ class EFESTrainer(StateNavV6Trainer):
                 )
 
                 median_value = float(self._c_micro_median_value)
+                future_window = max(int(self._efes_cfg().future_window), 1)
                 pending_pi_values = []
                 pending_targets = []
                 for i in range(self.envs.num_envs):
-                    if active_pending_pi[i] is None:
-                        continue
-                    pending_pi_values.append(active_pending_pi[i].reshape(1))
-                    target = 1.0 if float(step_outs["C_micro"][i].detach().item()) < median_value else 0.0
-                    pending_targets.append(target)
+                    updated_entries: List[Dict[str, Any]] = []
+                    current_c = float(step_outs["C_micro"][i].detach().item())
+                    for entry in active_pending_pi[i]:
+                        entry["sum"] += current_c
+                        entry["count"] += 1
+                        if entry["count"] >= future_window:
+                            pending_pi_values.append(entry["pi"])
+                            avg_future = entry["sum"] / max(entry["count"], 1)
+                            pending_targets.append(1.0 if avg_future < median_value else 0.0)
+                        else:
+                            updated_entries.append(entry)
+                    updated_entries.append({"pi": step_outs["pi_t"][i : i + 1], "sum": 0.0, "count": 0})
+                    active_pending_pi[i] = updated_entries
                 if pending_pi_values:
                     with cuda_autocast(enabled=False):
-                        cal_loss_sum = cal_loss_sum + F.binary_cross_entropy(
+                        pi_cal_loss_sum = pi_cal_loss_sum + F.binary_cross_entropy(
                             torch.cat(pending_pi_values, dim=0).float(),
                             torch.tensor(pending_targets, device=self.device, dtype=torch.float32),
                             reduction="sum",
                         )
-                for i in range(self.envs.num_envs):
-                    active_pending_pi[i] = step_outs["pi_t"][i : i + 1]
+                router_boot_loss_sum = router_boot_loss_sum + F.cross_entropy(
+                    step_outs["mode_logits"],
+                    step_outs["router_boot_targets"].long(),
+                    reduction="sum",
+                )
                 self._update_c_micro_median(step_outs["C_micro"])
 
             if feedback == "sample":
@@ -860,8 +949,9 @@ class EFESTrainer(StateNavV6Trainer):
             recurrent_state["prev_rssm_h"] = step_outs["rssm_h_t"]
             recurrent_state["prev_z"] = step_outs["z_flat"]
             recurrent_state["prev_progress"] = step_outs["progress_t"]
-            recurrent_state["prev_pi"] = step_outs["pi_t"]
             recurrent_state["prev_prior_alpha"] = step_outs["alpha_prior"]
+            recurrent_state["prev_topo_novelty"] = step_outs["topo_novelty"]
+            recurrent_state["prev_progress_gap"] = step_outs["g_t"]
 
             for i in range(self.envs.num_envs):
                 self._update_backtrack_history(
@@ -1016,6 +1106,7 @@ class EFESTrainer(StateNavV6Trainer):
                     prev_vp.pop(i)
                     active_backtrack_histories.pop(i)
                     active_c_micro_histories.pop(i)
+                    active_c_macro_histories.pop(i)
                     active_progress_histories.pop(i)
                     active_pos_histories.pop(i)
                     active_vp_histories.pop(i)
@@ -1031,8 +1122,9 @@ class EFESTrainer(StateNavV6Trainer):
                         "prev_z",
                         "prev_action_emb",
                         "prev_progress",
-                        "prev_pi",
                         "prev_prior_alpha",
+                        "prev_topo_novelty",
+                        "prev_progress_gap",
                     ):
                         recurrent_state[key] = recurrent_state[key].index_select(0, keep_tensor)
                     topo_bank = topo_bank.index_select(keep_indices)
@@ -1042,6 +1134,7 @@ class EFESTrainer(StateNavV6Trainer):
 
             for i in range(self.envs.num_envs):
                 active_c_micro_histories[i].append(float(step_outs["C_micro"][i].detach().item()))
+                active_c_macro_histories[i].append(float(step_outs["C_macro_diag"][i].detach().item()))
                 active_progress_histories[i].append(float(step_outs["progress_t"][i].detach().item()))
                 active_pos_histories[i].append(
                     torch.as_tensor(cur_pos[i], device=self.device, dtype=torch.float32)
@@ -1065,13 +1158,16 @@ class EFESTrainer(StateNavV6Trainer):
             total_macro_updates_f = max(float(total_macro_updates), 1.0)
             plan_loss = plan_loss_sum / total_actions_f
             kl_loss = kl_loss_sum / total_actions_f
-            node_loss = node_loss_sum / total_macro_updates_f
-            cal_loss = cal_loss_sum / total_actions_f
+            node_nll_loss = node_nll_sum / total_macro_updates_f
+            pi_cal_loss = pi_cal_loss_sum / total_actions_f
+            router_boot_loss = router_boot_loss_sum / total_actions_f
+            self._router_boot_weight = self._compute_router_boot_weight()
             total_loss = (
                 plan_loss
                 + float(self._efes_cfg().lambda_kl) * kl_loss
-                + float(self._efes_cfg().lambda_node) * node_loss
-                + float(self._efes_cfg().lambda_cal) * cal_loss
+                + float(self._efes_cfg().lambda_node) * node_nll_loss
+                + float(self._efes_cfg().lambda_pi) * pi_cal_loss
+                + float(self._router_boot_weight) * router_boot_loss
                 + ddp_anchor_sum
             )
             self.loss = self.loss + ml_weight * total_loss
@@ -1080,16 +1176,19 @@ class EFESTrainer(StateNavV6Trainer):
                 "total_loss": float(total_loss.detach().item()),
                 "plan_loss": float(plan_loss.detach().item()),
                 "kl_loss": float(kl_loss.detach().item()),
-                "node_loss": float(node_loss.detach().item()),
-                "cal_loss": float(cal_loss.detach().item()),
+                "node_nll_loss": float(node_nll_loss.detach().item()),
+                "pi_cal_loss": float(pi_cal_loss.detach().item()),
+                "router_boot_loss": float(router_boot_loss.detach().item()),
             }
             sum_metrics = {
                 "c_micro_sum": float(c_micro_sum.detach().item()),
-                "c_macro_sum": float(c_macro_sum.detach().item()),
+                "c_macro_diag_sum": float(c_macro_diag_sum.detach().item()),
+                "u_macro_sum": float(u_macro_sum.detach().item()),
                 "g_t_sum": float(g_t_sum.detach().item()),
                 "a_t_sum": float(a_t_sum.detach().item()),
                 "pi_t_sum": float(pi_t_sum.detach().item()),
                 "macro_valid_sum": float(macro_valid_sum.detach().item()),
+                "mode_entropy_sum": float(mode_entropy_sum.detach().item()),
                 "mode_count_0": float(mode_count_sum[0].detach().item()),
                 "mode_count_1": float(mode_count_sum[1].detach().item()),
                 "mode_count_2": float(mode_count_sum[2].detach().item()),
@@ -1120,13 +1219,26 @@ class EFESTrainer(StateNavV6Trainer):
                 "total_actions": float(count_metrics["total_actions"]),
                 "total_macro_updates": float(count_metrics["total_macro_updates"]),
                 "c_micro_mean": float(sum_metrics["c_micro_sum"]) / total_actions_global,
-                "c_macro_mean": float(sum_metrics["c_macro_sum"]) / total_macro_updates_global,
+                "c_macro_diag_mean": float(sum_metrics["c_macro_diag_sum"]) / total_macro_updates_global,
+                "u_macro_mean": float(sum_metrics["u_macro_sum"]) / total_actions_global,
                 "g_t_mean": float(sum_metrics["g_t_sum"]) / total_actions_global,
                 "a_t_mean": float(sum_metrics["a_t_sum"]) / total_actions_global,
                 "pi_t_mean": float(sum_metrics["pi_t_sum"]) / total_actions_global,
                 "macro_valid_ratio": float(sum_metrics["macro_valid_sum"]) / total_actions_global,
-                "recovery_mode_hist": mode_hist,
+                "mode_entropy_mean": float(sum_metrics["mode_entropy_sum"]) / total_actions_global,
+                "mode_hist_argmax": mode_hist,
                 **timing_metrics,
             }
             for key, value in scalar_metrics.items():
                 self.logs[key].append(value)
+            for key in (
+                "c_micro_mean",
+                "c_macro_diag_mean",
+                "u_macro_mean",
+                "g_t_mean",
+                "a_t_mean",
+                "pi_t_mean",
+                "macro_valid_ratio",
+                "mode_entropy_mean",
+            ):
+                self.logs[key].append(float(self._last_step_metrics[key]))

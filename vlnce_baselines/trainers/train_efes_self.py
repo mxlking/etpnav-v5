@@ -47,35 +47,337 @@ from habitat_baselines.common.baseline_registry import baseline_registry
 from habitat_baselines.common.tensorboard_utils import TensorboardWriter
 from habitat_baselines.utils.common import batch_obs
 from habitat_baselines.common.obs_transformers import apply_obs_transforms_batch
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 from fastdtw import fastdtw
 from habitat_extensions.measures import NDTW
-from vlnce_baselines.agents.efes_agent import EFESAgent
+from vlnce_baselines.agents.efes_self_agent import EFESSelfAgent
 from vlnce_baselines.common.utils import extract_instruction_tokens
 from vlnce_baselines.datasets.state_label_builder import StateLabelBuilder
-from vlnce_baselines.models.efes.topo_state_bank import TopoStateBank
+from vlnce_baselines.models.efes_self.topo_state_bank import TopoStateBankV2
 from vlnce_baselines.models.graph_utils import GraphMap
-from vlnce_baselines.trainers.train_statenav_v6_stage1 import StateNavV6Trainer, _state_model
+from vlnce_baselines.trainers.train_statenav_v6_stage1 import (
+    StateNavV6Trainer,
+    _RELEASE_R2R_CKPT,
+    _state_model,
+)
+from vlnce_baselines.utils import load_torch_checkpoint_compat
 
 
-@baseline_registry.register_trainer(name="EFES")
-class EFESTrainer(StateNavV6Trainer):
-    stage_name = "EFES"
+@baseline_registry.register_trainer(name="EFESSelf")
+class EFESSelfTrainer(StateNavV6Trainer):
+    stage_name = "EFESSelf"
+    contract_version = "v3-grouped"
+    accepted_contract_versions = ("v3-grouped",)
 
     def __init__(self, config=None):
         super().__init__(config)
         self._phase_name = "phase1"
         self._phase2_started = False
-        self._c_micro_median_buffer: Deque[float] = deque(maxlen=1000)
-        self._c_micro_median_value = 10.0
-        self._c_micro_refresh_counter = 0
         self._efes_optimizer_group_names: List[str] = []
+        self._checkpoint_mode = "train"
+        self._last_checkpoint_fingerprint: Dict[str, Any] = {}
 
     def _efes_cfg(self):
-        return self.config.EFES
+        return self.config.EFES_SELF
+
+    def _inspect_checkpoint(self, checkpoint_path: str):
+        checkpoint_realpath = os.path.realpath(checkpoint_path)
+        ckpt = load_torch_checkpoint_compat(checkpoint_realpath, map_location="cpu")
+        has_statenav_state = "statenav_state_dict" in ckpt
+        fingerprint = {
+            "checkpoint_path": checkpoint_path,
+            "checkpoint_realpath": checkpoint_realpath,
+            "checkpoint_type": "efes-full" if has_statenav_state else "bootstrap-only",
+            "has_statenav_state": bool(has_statenav_state),
+            "iteration": int(ckpt.get("iteration", 0)),
+            "efes_contract_version": ckpt.get("efes_contract_version", None),
+            "efes_phase": ckpt.get("efes_phase", None),
+            "has_optim_state": "optim_state" in ckpt,
+        }
+        return ckpt, checkpoint_realpath, fingerprint
+
+    def _log_checkpoint_fingerprint(self, fingerprint: Dict[str, Any], context: str) -> None:
+        logger.info(
+            "[EFES CKPT %s] path=%s type=%s has_statenav_state=%s iteration=%s contract=%s phase=%s optim=%s",
+            context,
+            fingerprint.get("checkpoint_path"),
+            fingerprint.get("checkpoint_type"),
+            fingerprint.get("has_statenav_state"),
+            fingerprint.get("iteration"),
+            fingerprint.get("efes_contract_version"),
+            fingerprint.get("efes_phase"),
+            fingerprint.get("has_optim_state"),
+        )
+
+    def _validate_efes_checkpoint_contract(
+        self,
+        fingerprint: Dict[str, Any],
+        *,
+        mode: str,
+        is_requeue: bool,
+    ) -> None:
+        has_statenav_state = bool(fingerprint.get("has_statenav_state", False))
+        contract_version = fingerprint.get("efes_contract_version")
+        checkpoint_realpath = str(fingerprint.get("checkpoint_realpath"))
+
+        if mode in ("eval", "inference"):
+            if not has_statenav_state:
+                raise RuntimeError(
+                    "EFES {} only accepts EFESSelf checkpoints with statenav_state_dict. "
+                    "Received bootstrap-only checkpoint {}. Use run_r2r/main.bash for baseline ETPNav evaluation."
+                    .format(mode, checkpoint_realpath)
+                )
+            if contract_version not in self.accepted_contract_versions:
+                raise RuntimeError(
+                    "EFES {} rejected checkpoint {} with unsupported contract version {}. "
+                    "Expected one of {}.".format(
+                        mode,
+                        checkpoint_realpath,
+                        contract_version,
+                        list(self.accepted_contract_versions),
+                    )
+                )
+            if fingerprint.get("efes_phase") is None:
+                raise RuntimeError(
+                    "EFES {} rejected checkpoint {} because efes_phase is missing.".format(
+                        mode, checkpoint_realpath
+                    )
+                )
+            return
+
+        if is_requeue:
+            if not has_statenav_state:
+                raise RuntimeError(
+                    "EFES resume requires a full EFESSelf checkpoint with statenav_state_dict, got {}.".format(
+                        checkpoint_realpath
+                    )
+                )
+            if contract_version not in self.accepted_contract_versions:
+                raise RuntimeError(
+                    "EFES resume rejected checkpoint {} with unsupported contract version {}. "
+                    "Expected one of {}.".format(
+                        checkpoint_realpath,
+                        contract_version,
+                        list(self.accepted_contract_versions),
+                    )
+                )
+            if not bool(fingerprint.get("has_optim_state", False)):
+                raise RuntimeError(
+                    "EFES resume requires optim_state in checkpoint {}, but it is missing.".format(
+                        checkpoint_realpath
+                    )
+                )
+            return
+
+        if not has_statenav_state and checkpoint_realpath != _RELEASE_R2R_CKPT:
+            raise RuntimeError(
+                "EFES fresh training only allows bootstrap-only checkpoint {}. Got {}.".format(
+                    _RELEASE_R2R_CKPT, checkpoint_realpath
+                )
+            )
+        if has_statenav_state and contract_version not in self.accepted_contract_versions:
+            raise RuntimeError(
+                "EFES training rejected checkpoint {} with unsupported contract version {}. "
+                "Expected one of {}.".format(
+                    checkpoint_realpath,
+                    contract_version,
+                    list(self.accepted_contract_versions),
+                )
+            )
+
+    def _get_eval_result_metadata(self) -> Dict[str, Any]:
+        payload = dict(self._last_checkpoint_fingerprint) if self._last_checkpoint_fingerprint else {}
+        payload.update(
+            {
+                "action_source": self._efes_action_source(),
+                "back_algo": str(self.config.IL.back_algo),
+                "conditioner_mode": str(getattr(self._efes_cfg(), "conditioner_mode", "prob_mixture")),
+                "conditioner_beta_max": float(getattr(self._efes_cfg(), "conditioner_beta_max", 0.1)),
+                "conditioner_stop_delta_scale": float(
+                    getattr(self._efes_cfg(), "conditioner_stop_delta_scale", 1.0)
+                ),
+                "use_self_revision": bool(getattr(self._efes_cfg(), "use_self_revision", True)),
+                "use_macro_rupture": bool(getattr(self._efes_cfg(), "use_macro_rupture", True)),
+                "use_grounding_rupture": bool(getattr(self._efes_cfg(), "use_grounding_rupture", True)),
+                "use_typed_rupture": bool(getattr(self._efes_cfg(), "use_typed_rupture", True)),
+            }
+        )
+        return payload
+
+    def _load_stage_checkpoint(self, checkpoint_path: str) -> int:
+        ckpt, checkpoint_realpath, fingerprint = self._inspect_checkpoint(checkpoint_path)
+        mode = getattr(self, "_checkpoint_mode", "train")
+        self._validate_efes_checkpoint_contract(
+            fingerprint,
+            mode=mode,
+            is_requeue=bool(self.config.IL.is_requeue),
+        )
+        self._log_checkpoint_fingerprint(fingerprint, context=mode)
+
+        has_statenav_state = bool(fingerprint["has_statenav_state"])
+
+        policy_load_msg = None
+        if "policy_state_dict" in ckpt:
+            policy_state_dict = self._align_state_dict_prefix(ckpt["policy_state_dict"], self.policy)
+            policy_load_msg = self.policy.load_state_dict(policy_state_dict, strict=False)
+        elif "state_dict" in ckpt:
+            policy_state_dict = self._align_state_dict_prefix(ckpt["state_dict"], self.policy)
+            policy_load_msg = self.policy.load_state_dict(policy_state_dict, strict=False)
+        else:
+            raise KeyError(
+                "Checkpoint {} has neither state_dict nor policy_state_dict".format(checkpoint_path)
+            )
+
+        policy_missing = len(policy_load_msg.missing_keys)
+        policy_unexpected = len(policy_load_msg.unexpected_keys)
+        logger.info(
+            "[Policy CKPT] missing_keys(%d) unexpected_keys(%d)",
+            policy_missing,
+            policy_unexpected,
+        )
+        if policy_missing or policy_unexpected:
+            raise RuntimeError(
+                "Invalid Policy checkpoint load for {}: missing_keys={}, unexpected_keys={}".format(
+                    checkpoint_path, policy_missing, policy_unexpected
+                )
+            )
+
+        if has_statenav_state:
+            statenav_state_dict = self._align_state_dict_prefix(ckpt["statenav_state_dict"], self.statenav_agent)
+            load_msg = self.statenav_agent.load_state_dict(statenav_state_dict, strict=False)
+            statenav_missing = len(load_msg.missing_keys)
+            statenav_unexpected = len(load_msg.unexpected_keys)
+            logger.info(
+                "[StateNav CKPT] missing_keys(%d) unexpected_keys(%d)",
+                statenav_missing,
+                statenav_unexpected,
+            )
+            missing_keys = list(load_msg.missing_keys)
+            unexpected_keys = list(load_msg.unexpected_keys)
+            allowed_missing_prefixes = ("action_conditioner.", "module.action_conditioner.")
+            conditioner_missing_only = bool(missing_keys) and all(
+                any(key.startswith(prefix) for prefix in allowed_missing_prefixes)
+                for key in missing_keys
+            )
+            allow_fresh_conditioner = (
+                conditioner_missing_only
+                and not unexpected_keys
+                and (
+                    (mode == "train" and not bool(self.config.IL.is_requeue))
+                    or self._efes_action_source() == "etp"
+                )
+            )
+            if allow_fresh_conditioner:
+                logger.warning(
+                    "Checkpoint %s has no action_conditioner weights; initializing the conditioner freshly "
+                    "for action_source=%s mode=%s.",
+                    checkpoint_path,
+                    self._efes_action_source(),
+                    mode,
+                )
+            elif conditioner_missing_only and not unexpected_keys:
+                raise RuntimeError(
+                    "Checkpoint {} is an older EFESSelf checkpoint without action_conditioner weights. "
+                    "action_source={} mode={} requires an active EFES checkpoint. "
+                    "Run active training from this checkpoint first, then evaluate the newly saved active checkpoint.".format(
+                        checkpoint_path,
+                        self._efes_action_source(),
+                        mode,
+                    )
+                )
+            elif statenav_missing or statenav_unexpected:
+                raise RuntimeError(
+                    "Invalid StateNav checkpoint load for {}: missing_keys={}, unexpected_keys={}".format(
+                        checkpoint_path, statenav_missing, statenav_unexpected
+                    )
+                )
+        else:
+            logger.info("[StateNav CKPT] missing_keys(0) unexpected_keys(0) [bootstrap-only initialization]")
+
+        if has_statenav_state and self.config.IL.is_requeue and "optim_state" in ckpt:
+            try:
+                self.optimizer.load_state_dict(ckpt["optim_state"])
+            except Exception as exc:
+                logger.warning("Unable to restore optimizer state cleanly: %s", exc)
+
+        self._resume_scaler_state = ckpt.get("scaler_state") if has_statenav_state else None
+        self.best_metric = float(ckpt.get("best_metric", self.best_metric)) if has_statenav_state else float("inf")
+        start_iter = int(ckpt.get("iteration", 0)) if has_statenav_state else 0
+        self._last_checkpoint_fingerprint = fingerprint
+
+        if has_statenav_state:
+            logger.info(
+                "Loaded EFESSelf checkpoint for %s: %s at iteration %d [contract=%s phase=%s]",
+                mode,
+                checkpoint_path,
+                start_iter,
+                fingerprint.get("efes_contract_version"),
+                fingerprint.get("efes_phase"),
+            )
+        else:
+            logger.info(
+                "Loaded bootstrap-only ETPNav checkpoint for training: %s. StateNav modules keep fresh initialization.",
+                checkpoint_path,
+            )
+        return start_iter
+
+    def eval(self):
+        self._checkpoint_mode = "eval"
+        super().eval()
+
+    def inference(self) -> None:
+        self._checkpoint_mode = "inference"
+        super().inference()
+
+    def _eval_episode_allowlist(self) -> set:
+        raw = getattr(self.config.EVAL, "EPISODE_ID_ALLOWLIST", "")
+        if raw is None:
+            return set()
+        if isinstance(raw, str):
+            raw = raw.replace(";", ",")
+            values = [item.strip() for item in raw.split(",")]
+        elif isinstance(raw, (list, tuple)):
+            values = [str(item).strip() for item in raw]
+        else:
+            values = [str(raw).strip()]
+        return {item for item in values if item}
+
+    def collect_val_traj(self):
+        trajectories = super().collect_val_traj()
+        if getattr(self, "_checkpoint_mode", "train") != "eval":
+            return trajectories
+
+        allowlist = self._eval_episode_allowlist()
+        if not allowlist:
+            return trajectories
+
+        filtered = [ep_id for ep_id in trajectories if str(ep_id) in allowlist]
+        found = {str(ep_id) for ep_id in filtered}
+        missing = sorted(allowlist.difference(found))
+        logger.info(
+            "EFES eval episode allowlist active: kept %d/%d episodes on rank %d. missing_on_rank=%s",
+            len(filtered),
+            len(trajectories),
+            int(getattr(self.config, "local_rank", 0)),
+            ",".join(missing) if missing else "<none>",
+        )
+        if not filtered:
+            raise ValueError(
+                "EVAL.EPISODE_ID_ALLOWLIST did not match any episodes on this eval rank. "
+                f"Requested={sorted(allowlist)}"
+            )
+        return filtered
 
     def _logging_cfg(self):
-        return self.config.EFES.LOGGING
+        return self.config.EFES_SELF.LOGGING
+
+    def _efes_action_source(self) -> str:
+        source = str(getattr(self._efes_cfg(), "action_source", "etp")).strip().lower()
+        if source not in {"etp", "efes_safe", "efes_hard"}:
+            logger.warning("Unknown EFES_SELF.action_source=%s. Falling back to etp.", source)
+            source = "etp"
+        return source
 
     def _log_prior_post_metrics_enabled(self) -> bool:
         return bool(getattr(self._logging_cfg(), "log_diag_metrics", True))
@@ -92,7 +394,7 @@ class EFESTrainer(StateNavV6Trainer):
         else:
             etp_dim = self.policy.net.output_size
 
-        self.statenav_agent = EFESAgent.from_config(
+        self.statenav_agent = EFESSelfAgent.from_config(
             self.config,
             x_dim=etp_dim,
             lang_dim=etp_dim,
@@ -155,8 +457,21 @@ class EFESTrainer(StateNavV6Trainer):
     def _configure_trainable_modules(self) -> None:
         self._set_train_phase(phase2=False)
 
+    def _wrap_statenav_for_ddp(self) -> None:
+        if self.world_size <= 1 or isinstance(self.statenav_agent, DDP):
+            return
+        self.statenav_agent = DDP(
+            self.statenav_agent,
+            device_ids=[self.device_id],
+            output_device=self.device_id,
+            find_unused_parameters=True,
+            broadcast_buffers=False,
+        )
+
     def _maybe_activate_phase2(self) -> None:
         if self._phase2_started:
+            return
+        if not bool(getattr(self._efes_cfg(), "enable_phase2", False)):
             return
         if int(self._train_iteration) < int(self._efes_cfg().phase1_iters):
             return
@@ -183,6 +498,8 @@ class EFESTrainer(StateNavV6Trainer):
     @staticmethod
     def _step_metric_columns() -> List[str]:
         return [
+            "contract_version",
+            "action_source",
             "iteration",
             "phase",
             "interval_step",
@@ -194,18 +511,41 @@ class EFESTrainer(StateNavV6Trainer):
             "grad_norm",
             "total_loss",
             "plan_loss",
+            "self_loss",
+            "cons_loss",
+            "aux_loss",
+            "trust_loss",
+            "bind_loss",
             "kl_loss",
-            "node_loss",
-            "cal_loss",
+            "node_nll_loss",
+            "local_pred_loss",
+            "topo_pred_loss",
+            "prog_pred_loss",
+            "clarity_loss",
             "total_actions",
             "total_macro_updates",
             "c_micro_mean",
-            "c_macro_mean",
+            "c_macro_diag_mean",
+            "u_macro_mean",
             "g_t_mean",
-            "a_t_mean",
-            "pi_t_mean",
+            "self_mismatch_mean",
+            "kappa_self_mean",
+            "self_clarity_mean",
+            "r_local_mean",
+            "r_topo_mean",
+            "r_ground_mean",
+            "rupture_conf_mean",
+            "self_agency_mean",
+            "self_phase_mean",
+            "self_continuity_mean",
             "macro_valid_ratio",
-            "recovery_mode_hist",
+            "mode_hist_argmax",
+            "condition_gate_mean",
+            "condition_delta_mean",
+            "condition_policy_kl_mean",
+            "score_before_mean",
+            "score_after_mean",
+            "etp_unfrozen_grad_norm",
             "train_step_sec",
             "rollout_sec",
             "backward_sec",
@@ -230,7 +570,9 @@ class EFESTrainer(StateNavV6Trainer):
         grad_norm: float,
     ) -> Dict[str, Any]:
         record = super()._build_step_metric_record(interval_step, interval_size, sample_ratio, grad_norm)
+        record["contract_version"] = self.contract_version
         record["phase"] = self._phase_name
+        record["action_source"] = self._efes_action_source()
         return record
 
     def _log_step_metric_record(self, record: Dict[str, Any]) -> None:
@@ -240,28 +582,52 @@ class EFESTrainer(StateNavV6Trainer):
         if int(record["iteration"]) % step_log_every != 0:
             return
         logger.info(
-            "[EFES %s %06d/%06d | interval %03d/%03d] total=%.4f plan=%.4f kl=%.4f node=%.4f cal=%.4f grad=%.4f lr=%.2e"
-            " | c=%.3f/%.3f g=%.3f A=%.3f pi=%.3f macro=%.3f modes=%s"
+            "[EFESSelf %s %s action=%s %06d/%06d | interval %03d/%03d] total=%.4f plan=%.4f self=%.4f cons=%.4f aux=%.4f grad=%.4f lr=%.2e"
+            " | detail(bind=%.4f kl=%.4f node_nll=%.4f local=%.4f topo=%.4f prog=%.4f clarity=%.4f)"
+            " | c=%.3f/%.3f u=%.3f g=%.3f mismatch=%.3f kappa=%.3f clarity=%.3f rupture=%.3f/%.3f/%.3f conf=%.3f self=%.3f/%.3f/%.3f macro=%.3f modes=%s cond=%.3f/%.3f score=%.3f/%.3f etp=%.4f"
             " | sec(step=%.2f roll=%.2f bw=%.2f opt=%.2f lang=%.2f wp=%.2f pano=%.2f nav=%.2f efes=%.2f env=%.2f prep=%.2f)",
             str(record.get("phase", "phase1")),
+            str(record.get("contract_version", self.contract_version)),
+            str(record.get("action_source", self._efes_action_source())),
             int(record["iteration"]),
             int(self.config.IL.iters),
             int(record.get("interval_step", 0)),
             int(record.get("interval_size", 0)),
             float(record.get("total_loss", 0.0)),
             float(record.get("plan_loss", 0.0)),
-            float(record.get("kl_loss", 0.0)),
-            float(record.get("node_loss", 0.0)),
-            float(record.get("cal_loss", 0.0)),
+            float(record.get("self_loss", 0.0)),
+            float(record.get("cons_loss", 0.0)),
+            float(record.get("aux_loss", 0.0)),
             float(record.get("grad_norm", 0.0)),
             float(record.get("lr", 0.0)),
+            float(record.get("bind_loss", 0.0)),
+            float(record.get("kl_loss", 0.0)),
+            float(record.get("node_nll_loss", 0.0)),
+            float(record.get("local_pred_loss", 0.0)),
+            float(record.get("topo_pred_loss", 0.0)),
+            float(record.get("prog_pred_loss", 0.0)),
+            float(record.get("clarity_loss", 0.0)),
             float(record.get("c_micro_mean", 0.0)),
-            float(record.get("c_macro_mean", 0.0)),
+            float(record.get("c_macro_diag_mean", 0.0)),
+            float(record.get("u_macro_mean", 0.0)),
             float(record.get("g_t_mean", 0.0)),
-            float(record.get("a_t_mean", 0.0)),
-            float(record.get("pi_t_mean", 0.0)),
+            float(record.get("self_mismatch_mean", 0.0)),
+            float(record.get("kappa_self_mean", 0.0)),
+            float(record.get("self_clarity_mean", 0.0)),
+            float(record.get("r_local_mean", 0.0)),
+            float(record.get("r_topo_mean", 0.0)),
+            float(record.get("r_ground_mean", 0.0)),
+            float(record.get("rupture_conf_mean", 0.0)),
+            float(record.get("self_agency_mean", 0.0)),
+            float(record.get("self_phase_mean", 0.0)),
+            float(record.get("self_continuity_mean", 0.0)),
             float(record.get("macro_valid_ratio", 0.0)),
-            str(record.get("recovery_mode_hist", "-")),
+            str(record.get("mode_hist_argmax", "-")),
+            float(record.get("condition_gate_mean", 0.0)),
+            float(record.get("condition_delta_mean", 0.0)),
+            float(record.get("score_before_mean", 0.0)),
+            float(record.get("score_after_mean", 0.0)),
+            float(record.get("etp_unfrozen_grad_norm", 0.0)),
             float(record.get("train_step_sec", 0.0)),
             float(record.get("rollout_sec", 0.0)),
             float(record.get("backward_sec", 0.0)),
@@ -277,6 +643,7 @@ class EFESTrainer(StateNavV6Trainer):
 
     def save_checkpoint(self, iteration: int, is_best: bool = False):
         import glob
+        import re
 
         ckpt_dir = self.config.CHECKPOINT_FOLDER
         os.makedirs(ckpt_dir, exist_ok=True)
@@ -291,6 +658,7 @@ class EFESTrainer(StateNavV6Trainer):
                 "iteration": iteration,
                 "best_metric": self.best_metric,
                 "efes_phase": self._phase_name,
+                "efes_contract_version": self.contract_version,
             },
             f=ckpt_path,
         )
@@ -306,18 +674,24 @@ class EFESTrainer(StateNavV6Trainer):
                     "iteration": iteration,
                     "best_metric": self.best_metric,
                     "efes_phase": self._phase_name,
+                    "efes_contract_version": self.contract_version,
                 },
                 f=best_path,
             )
 
         max_keep = max(int(self._efes_cfg().max_keep_checkpoints), 1)
-        existing = sorted(glob.glob(os.path.join(ckpt_dir, "ckpt.iter*.pth")))
+        def _iter_key(path: str) -> int:
+            match = re.search(r"ckpt\.iter(\d+)\.pth$", path)
+            return int(match.group(1)) if match else -1
+
+        existing = sorted(glob.glob(os.path.join(ckpt_dir, "ckpt.iter*.pth")), key=_iter_key)
         while len(existing) > max_keep:
             oldest = existing.pop(0)
             os.remove(oldest)
             logger.info("Removed old EFES checkpoint: %s", oldest)
 
     def train(self):
+        self._checkpoint_mode = "train"
         self._set_config()
         self._load_gt_data()
         observation_space, action_space = self._init_envs()
@@ -328,7 +702,7 @@ class EFESTrainer(StateNavV6Trainer):
             action_space=action_space,
         )
         self._train_iteration = start_iter
-        if int(start_iter) >= int(self._efes_cfg().phase1_iters):
+        if bool(getattr(self._efes_cfg(), "enable_phase2", False)) and int(start_iter) >= int(self._efes_cfg().phase1_iters):
             self._set_train_phase(phase2=True)
 
         total_iter = self.config.IL.iters
@@ -344,7 +718,7 @@ class EFESTrainer(StateNavV6Trainer):
 
         self._prepare_step_metric_writer()
 
-        logger.info("EFES training starts...")
+        logger.info("EFES-Self training starts...")
         for idx in range(start_iter, total_iter, log_every):
             self._maybe_activate_phase2()
             interval = min(log_every, max(total_iter - idx, 0))
@@ -361,7 +735,7 @@ class EFESTrainer(StateNavV6Trainer):
                     if is_best:
                         self.best_metric = total_metric
                 logger.info(
-                    "[EFES summary %06d | %s] %s",
+                    "[EFES-Self summary %06d | %s] %s",
                     cur_iter,
                     self._phase_name,
                     ", ".join(f"{k}: {v:.4f}" for k, v in summary.items()),
@@ -371,13 +745,16 @@ class EFESTrainer(StateNavV6Trainer):
                 self.save_checkpoint(cur_iter, is_best=is_best)
 
     def _train_interval(self, interval, ml_weight, sample_ratio):
-        self.policy.eval()
+        if self._phase2_started:
+            self.policy.train()
+        else:
+            self.policy.eval()
         self.statenav_agent.train()
         self.waypoint_predictor.eval()
 
         use_tqdm = bool(self._logging_cfg().use_tqdm) and self._is_main_process()
         pbar = (
-            tqdm.trange(interval, leave=False, dynamic_ncols=True, desc=f"EFES {self._phase_name}")
+            tqdm.trange(interval, leave=False, dynamic_ncols=True, desc=f"EFESSelf {self._phase_name}")
             if use_tqdm
             else range(interval)
         )
@@ -397,12 +774,25 @@ class EFESTrainer(StateNavV6Trainer):
             self.scaler.scale(self.loss).backward()
             self.scaler.unscale_(self.optimizer)
             trainable_params = []
+            unfrozen_etp_params = []
             for group in self.optimizer.param_groups:
                 trainable_params.extend([param for param in group["params"] if param.grad is not None])
+                if str(group.get("group_name", "")) == "etp":
+                    unfrozen_etp_params.extend([param for param in group["params"] if param.grad is not None])
+            for param in trainable_params:
+                if not torch.isfinite(param.grad).all():
+                    param.grad = torch.nan_to_num(param.grad, nan=0.0, posinf=0.0, neginf=0.0)
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 trainable_params,
                 max_norm=float(self._efes_cfg().grad_clip_norm),
             )
+            if unfrozen_etp_params:
+                etp_unfrozen_grad_norm = torch.norm(
+                    torch.stack([param.grad.detach().norm(2) for param in unfrozen_etp_params]),
+                    2,
+                )
+            else:
+                etp_unfrozen_grad_norm = torch.zeros((), device=self.device)
             backward_sec = self._timing_now() - backward_start
 
             optimizer_start = self._timing_now()
@@ -418,6 +808,7 @@ class EFESTrainer(StateNavV6Trainer):
                     "rollout_sec": float(rollout_sec),
                     "backward_sec": float(backward_sec),
                     "optimizer_sec": float(optimizer_sec),
+                    "etp_unfrozen_grad_norm": float(etp_unfrozen_grad_norm.detach().item()),
                 }
             )
 
@@ -441,58 +832,38 @@ class EFESTrainer(StateNavV6Trainer):
                     )
         return deepcopy(self.logs)
 
-    def _refresh_c_micro_median(self) -> None:
-        if len(self._c_micro_median_buffer) < 8:
-            return
-        self._c_micro_median_value = float(np.median(np.asarray(self._c_micro_median_buffer, dtype=np.float32)))
+    def _micro_kl_training_term(self, c_micro_kl_raw: Tensor) -> Tensor:
+        free_nats = float(self._efes_cfg().micro_free_nats)
+        kl_cap = float(self._efes_cfg().micro_kl_cap)
+        return c_micro_kl_raw.clamp_min(free_nats).clamp_max(kl_cap)
 
-    def _update_c_micro_median(self, c_micro: Tensor) -> None:
-        values = c_micro.detach().cpu().tolist()
-        for value in values:
-            self._c_micro_median_buffer.append(float(value))
-        self._c_micro_refresh_counter += len(values)
-        if self._c_micro_refresh_counter >= 100:
-            self._refresh_c_micro_median()
-            self._c_micro_refresh_counter = 0
-
-    def _grounding_inputs(
+    def _reality_echo_inputs(
         self,
-        progress_history: Sequence[Deque[float]],
         pos_history: Sequence[Deque[Tensor]],
         vp_history: Sequence[Deque[Any]],
         current_pos: Sequence[Any],
         current_vp: Sequence[Any],
-        prev_progress: Tensor,
-    ) -> tuple[Tensor, Tensor]:
+        frontier_size: Tensor,
+        prev_frontier_size: Tensor,
+    ) -> tuple[Tensor, Tensor, Tensor]:
         batch_size = len(current_pos)
-        progress_ref = prev_progress.detach().clone()
-        is_static = torch.zeros(batch_size, device=self.device, dtype=torch.bool)
-        eps_path = float(self._efes_cfg().eps_path)
+        path_delta = torch.zeros(batch_size, device=self.device, dtype=torch.float32)
+        topo_advanced = torch.zeros(batch_size, device=self.device, dtype=torch.float32)
+        frontier_delta = frontier_size.detach().to(dtype=torch.float32) - prev_frontier_size.to(dtype=torch.float32)
         for batch_idx in range(batch_size):
-            if progress_history[batch_idx]:
-                progress_ref[batch_idx, 0] = float(progress_history[batch_idx][0])
             current_pos_tensor = torch.as_tensor(
                 current_pos[batch_idx],
                 device=self.device,
                 dtype=torch.float32,
             )
-            recent_positions = list(pos_history[batch_idx]) + [current_pos_tensor]
-            path_delta = 0.0
-            if len(recent_positions) >= 2:
-                for left, right in zip(recent_positions[:-1], recent_positions[1:]):
-                    path_delta += float(torch.norm(right - left, p=2).item())
-            unique_vp_delta = self._unique_vp_delta(vp_history[batch_idx], current_vp[batch_idx])
-            is_static[batch_idx] = bool(path_delta < eps_path and unique_vp_delta == 0)
-        return progress_ref, is_static
-
-    @staticmethod
-    def _unique_vp_delta(history: Deque[Any], current_vp: Any) -> int:
-        values = [vp for vp in history if vp is not None]
-        if current_vp is not None:
-            values.append(current_vp)
-        if not values:
-            return 0
-        return max(len(set(values)) - 1, 0)
+            if pos_history[batch_idx]:
+                path_delta[batch_idx] = torch.norm(
+                    current_pos_tensor - pos_history[batch_idx][-1],
+                    p=2,
+                )
+            previous_vp = vp_history[batch_idx][-1] if vp_history[batch_idx] else None
+            topo_advanced[batch_idx] = 1.0 if (previous_vp is not None and current_vp[batch_idx] != previous_vp) else 0.0
+        return path_delta, topo_advanced, frontier_delta
 
     @staticmethod
     def _history_mean(history: Deque[float]) -> float:
@@ -504,7 +875,7 @@ class EFESTrainer(StateNavV6Trainer):
     def _recovery_hist_string(mode_counts: Dict[int, float]) -> str:
         total = max(sum(mode_counts.values()), 1.0)
         return "|".join(
-            f"{mode}:{mode_counts.get(mode, 0.0) / total:.3f}" for mode in (0, 1, 2, 3)
+            f"{mode}:{mode_counts.get(mode, 0.0) / total:.3f}" for mode in (0, 1, 2)
         )
 
     def rollout(self, mode, ml_weight=None, sample_ratio=None):
@@ -528,9 +899,11 @@ class EFESTrainer(StateNavV6Trainer):
             self.statenav_agent.train()
         else:
             self.statenav_agent.eval()
+        policy_grad_enabled = bool(mode == "train" and self._phase2_started)
+        policy_ctx = torch.enable_grad if policy_grad_enabled else torch.no_grad
 
         lang_start = self._timing_now()
-        with torch.no_grad():
+        with policy_ctx():
             all_txt_ids = batch["instruction"]
             all_txt_masks = all_txt_ids != instr_pad_id
             all_txt_embeds = self.policy.net(
@@ -555,16 +928,34 @@ class EFESTrainer(StateNavV6Trainer):
         total_macro_updates = 0
         plan_loss_sum = torch.zeros((), device=self.device)
         kl_loss_sum = torch.zeros((), device=self.device)
-        node_loss_sum = torch.zeros((), device=self.device)
-        cal_loss_sum = torch.zeros((), device=self.device)
+        node_nll_sum = torch.zeros((), device=self.device)
+        local_pred_loss_sum = torch.zeros((), device=self.device)
+        topo_pred_loss_sum = torch.zeros((), device=self.device)
+        prog_pred_loss_sum = torch.zeros((), device=self.device)
+        clarity_loss_sum = torch.zeros((), device=self.device)
         ddp_anchor_sum = torch.zeros((), device=self.device)
         c_micro_sum = torch.zeros((), device=self.device)
-        c_macro_sum = torch.zeros((), device=self.device)
+        c_macro_diag_sum = torch.zeros((), device=self.device)
+        u_macro_sum = torch.zeros((), device=self.device)
         g_t_sum = torch.zeros((), device=self.device)
-        a_t_sum = torch.zeros((), device=self.device)
-        pi_t_sum = torch.zeros((), device=self.device)
+        kappa_self_sum = torch.zeros((), device=self.device)
+        self_clarity_sum = torch.zeros((), device=self.device)
+        r_local_sum = torch.zeros((), device=self.device)
+        r_topo_sum = torch.zeros((), device=self.device)
+        r_ground_sum = torch.zeros((), device=self.device)
+        rupture_conf_sum = torch.zeros((), device=self.device)
+        self_agency_sum = torch.zeros((), device=self.device)
+        self_phase_sum = torch.zeros((), device=self.device)
+        self_continuity_sum = torch.zeros((), device=self.device)
         macro_valid_sum = torch.zeros((), device=self.device)
-        mode_count_sum = torch.zeros(4, device=self.device)
+        mode_count_sum = torch.zeros(3, device=self.device)
+        bind_loss_sum = torch.zeros((), device=self.device)
+        self_mismatch_sum = torch.zeros((), device=self.device)
+        condition_gate_sum = torch.zeros((), device=self.device)
+        condition_delta_sum = torch.zeros((), device=self.device)
+        condition_policy_kl_sum = torch.zeros((), device=self.device)
+        score_before_sum = torch.zeros((), device=self.device)
+        score_after_sum = torch.zeros((), device=self.device)
 
         not_done_index = list(range(self.envs.num_envs))
         have_real_pos = mode == "train" or self.config.VIDEO_OPTION
@@ -581,28 +972,22 @@ class EFESTrainer(StateNavV6Trainer):
         prev_vp = [None] * self.envs.num_envs
         state_model = _state_model(self.statenav_agent)
         recurrent_state = state_model.init_recurrent_state(self.envs.num_envs, self.device)
-        topo_bank = TopoStateBank.create(
+        topo_bank = TopoStateBankV2.create(
             num_envs=self.envs.num_envs,
             max_nodes=int(self._efes_cfg().max_nodes),
             feat_dim=int(state_model.x_dim),
             device=self.device,
         )
         active_backtrack_histories = [dict() for _ in range(self.envs.num_envs)]
-        active_c_micro_histories = [
-            deque(maxlen=int(self._efes_cfg().history_window)) for _ in range(self.envs.num_envs)
-        ]
-        active_progress_histories = [
-            deque(maxlen=int(self._efes_cfg().history_window)) for _ in range(self.envs.num_envs)
-        ]
         active_pos_histories = [
             deque(maxlen=int(self._efes_cfg().history_window)) for _ in range(self.envs.num_envs)
         ]
         active_vp_histories = [
             deque(maxlen=int(self._efes_cfg().history_window)) for _ in range(self.envs.num_envs)
         ]
-        active_pending_pi: List[Optional[Tensor]] = [None for _ in range(self.envs.num_envs)]
+        prev_frontier_size = torch.zeros(self.envs.num_envs, device=self.device, dtype=torch.float32)
         active_eval_diag = [
-            {"a_t": [], "c_micro": [], "c_macro": [], "g_t": [], "pi_t": [], "macro_valid": []}
+            {"a_t": [], "c_micro": [], "c_macro": [], "g_t": [], "macro_valid": []}
             for _ in range(self.envs.num_envs)
         ] if mode == "eval" else None
 
@@ -611,7 +996,7 @@ class EFESTrainer(StateNavV6Trainer):
             txt_masks = all_txt_masks[not_done_index]
             txt_embeds = all_txt_embeds[not_done_index]
 
-            with torch.no_grad():
+            with policy_ctx():
                 waypoint_start = self._timing_now()
                 wp_outputs = self.policy.net(
                     mode="waypoint",
@@ -703,30 +1088,46 @@ class EFESTrainer(StateNavV6Trainer):
                 active_backtrack_histories,
                 current_step=stepk,
             )
-            candidate_counts = torch.tensor(
-                [len(cand_vp_i) for cand_vp_i in cand_vp],
-                device=self.device,
-                dtype=torch.long,
+            candidate_counts = frontier_candidate_mask.to(dtype=torch.long).sum(dim=-1)
+            current_comp_feat = state_model.macro_head.compress(avg_pano_embeds).detach()
+            current_topo_novelty = state_model.macro_head.cosine_novelty(
+                current_comp_feat,
+                topo_bank.bank_feat,
+                topo_bank.bank_mask,
             )
             topo_update_mask = topo_bank.build_update_mask(
                 current_vp_ids=cur_vp,
                 candidate_counts=candidate_counts,
                 current_step=stepk + 1,
+                topo_novelty=current_topo_novelty,
                 decision_candidate_min=int(self._efes_cfg().node_decision_candidate_min),
                 timeout_steps=int(self._efes_cfg().timeout_steps),
+                novelty_threshold=float(self._efes_cfg().novelty_threshold),
+                cooldown_steps=int(self._efes_cfg().cooldown_steps),
             )
-            c_micro_recent_mean = torch.tensor(
-                [self._history_mean(history) for history in active_c_micro_histories],
+            revisit_count = torch.tensor(
+                [float(sum(1 for vp in history if vp == cur_vp_i)) for history, cur_vp_i in zip(active_vp_histories, cur_vp)],
                 device=self.device,
                 dtype=avg_pano_embeds.dtype,
             )
-            ground_progress_ref, ground_is_static = self._grounding_inputs(
-                progress_history=active_progress_histories,
+            loop_evidence = torch.tensor(
+                [
+                    1.0
+                    if (cur_vp_i is not None and cur_vp_i in history and self._unique_vp_delta(history, cur_vp_i) <= 1)
+                    else 0.0
+                    for history, cur_vp_i in zip(active_vp_histories, cur_vp)
+                ],
+                device=self.device,
+                dtype=avg_pano_embeds.dtype,
+            )
+            frontier_size = frontier_candidate_mask.to(avg_pano_embeds.dtype).sum(dim=-1)
+            path_delta, topo_advanced, frontier_delta = self._reality_echo_inputs(
                 pos_history=active_pos_histories,
                 vp_history=active_vp_histories,
                 current_pos=cur_pos,
                 current_vp=cur_vp,
-                prev_progress=recurrent_state["prev_progress"],
+                frontier_size=frontier_size,
+                prev_frontier_size=prev_frontier_size,
             )
 
             statenav_start = self._timing_now()
@@ -742,17 +1143,21 @@ class EFESTrainer(StateNavV6Trainer):
                 prev_rssm_h=recurrent_state["prev_rssm_h"],
                 prev_progress=recurrent_state["prev_progress"],
                 prev_prior_alpha=recurrent_state["prev_prior_alpha"],
-                c_micro_recent_mean=c_micro_recent_mean,
-                ground_progress_ref=ground_progress_ref,
-                ground_is_static=ground_is_static,
+                prev_topo_novelty=recurrent_state["prev_topo_novelty"],
+                prev_progress_gap=recurrent_state["prev_progress_gap"],
+                path_delta=path_delta,
+                topo_advanced=topo_advanced,
+                frontier_delta=frontier_delta,
                 topo_bank_feat=topo_bank.bank_feat,
                 topo_bank_mask=topo_bank.bank_mask,
-                topo_update_mask=topo_update_mask,
+                macro_valid_mask=topo_update_mask,
                 candidate_mask=candidate_mask,
+                invalid_candidate_mask=invalid_candidate_mask,
+                frontier_size=frontier_size,
+                revisit_count=revisit_count,
+                loop_evidence=loop_evidence,
                 history_backtrack_values=history_backtrack_values,
                 history_valid_mask=history_valid_mask,
-                frontier_mask=frontier_candidate_mask,
-                local_frontier_mask=local_frontier_candidate_mask,
                 lang_mask=txt_masks,
             )
             timing_sums["statenav_sec"] += self._timing_now() - statenav_start
@@ -767,22 +1172,35 @@ class EFESTrainer(StateNavV6Trainer):
             c_micro_sum = c_micro_sum + step_outs["C_micro"].sum()
             macro_valid_mask = step_outs["macro_valid_mask"]
             if bool(macro_valid_mask.any().item()):
-                c_macro_sum = c_macro_sum + step_outs["C_macro"][macro_valid_mask].sum()
+                c_macro_diag_sum = c_macro_diag_sum + step_outs["C_macro_diag"][macro_valid_mask].sum()
             g_t_sum = g_t_sum + step_outs["g_t"].sum()
-            a_t_sum = a_t_sum + step_outs["A_t"].sum()
-            pi_t_sum = pi_t_sum + step_outs["pi_t"].sum()
+            kappa_self_sum = kappa_self_sum + step_outs["kappa_self"].sum()
+            self_clarity_sum = self_clarity_sum + step_outs["self_clarity"].sum()
+            r_local_sum = r_local_sum + step_outs["delta_control"].sum()
+            r_topo_sum = r_topo_sum + step_outs["delta_boundary"].sum()
+            r_ground_sum = r_ground_sum + step_outs["delta_progress"].sum()
+            rupture_conf_sum = rupture_conf_sum + step_outs["rupture_confidence"].sum()
+            self_agency_sum = self_agency_sum + step_outs["self_agency"].sum()
+            self_phase_sum = self_phase_sum + step_outs["self_phase"].sum()
+            self_continuity_sum = self_continuity_sum + step_outs["self_continuity"].sum()
+            u_macro_sum = u_macro_sum + step_outs["U_macro"].sum()
             macro_valid_sum = macro_valid_sum + macro_valid_mask.to(torch.float32).sum()
             total_macro_updates += int(macro_valid_mask.sum().item())
-            for mode_idx in range(4):
-                mode_count_sum[mode_idx] = mode_count_sum[mode_idx] + step_outs["recovery_mode"].eq(mode_idx).sum()
+            self_mismatch_sum = self_mismatch_sum + step_outs["self_mismatch"].sum()
+            condition_gate_sum = condition_gate_sum + step_outs["condition_gate"].sum()
+            condition_delta_sum = condition_delta_sum + step_outs["condition_delta"].sum()
+            condition_policy_kl_sum = condition_policy_kl_sum + step_outs["condition_policy_kl"].sum()
+            score_before_sum = score_before_sum + step_outs["score_before_mean"].sum()
+            score_after_sum = score_after_sum + step_outs["score_after_mean"].sum()
+            for mode_idx in range(3):
+                mode_count_sum[mode_idx] = mode_count_sum[mode_idx] + step_outs["argmax_mode"].eq(mode_idx).sum()
 
             if mode == "eval" and active_eval_diag is not None:
                 for i in range(self.envs.num_envs):
                     active_eval_diag[i]["a_t"].append(float(step_outs["A_t"][i].detach().item()))
                     active_eval_diag[i]["c_micro"].append(float(step_outs["C_micro"][i].detach().item()))
-                    active_eval_diag[i]["c_macro"].append(float(step_outs["C_macro"][i].detach().item()))
+                    active_eval_diag[i]["c_macro"].append(float(step_outs["C_macro_diag"][i].detach().item()))
                     active_eval_diag[i]["g_t"].append(float(step_outs["g_t"][i].detach().item()))
-                    active_eval_diag[i]["pi_t"].append(float(step_outs["pi_t"][i].detach().item()))
                     active_eval_diag[i]["macro_valid"].append(float(step_outs["macro_valid_mask"][i].detach().item()))
 
             if mode == "train" or self.config.VIDEO_OPTION:
@@ -790,15 +1208,20 @@ class EFESTrainer(StateNavV6Trainer):
             else:
                 teacher_actions = None
 
-            use_recovery_scores = not (mode == "train" and not self._phase2_started)
-            behavior_logits = step_outs["rescored_candidate_scores"] if use_recovery_scores else nav_logits
-            nav_probs = F.softmax(behavior_logits, dim=1)
+            action_source = self._efes_action_source()
+            if action_source == "efes_safe":
+                action_logits = step_outs["safe_logits"]
+            elif action_source == "efes_hard":
+                action_logits = step_outs["hard_logits"]
+            else:
+                action_logits = nav_logits
+            nav_probs = F.softmax(action_logits, dim=1)
             for i, gmap in enumerate(self.gmaps):
                 gmap.node_stop_scores[cur_vp[i]] = nav_probs[i, 0].detach().item()
 
             if mode == "train":
                 loss_logits = self._make_teacher_safe_logits(
-                    rescored_logits=behavior_logits,
+                    rescored_logits=action_logits,
                     fallback_logits=nav_logits,
                     teacher_actions=teacher_actions,
                     invalid_candidate_mask=invalid_candidate_mask,
@@ -809,34 +1232,34 @@ class EFESTrainer(StateNavV6Trainer):
                     ignore_index=-100,
                     reduction="sum",
                 )
-                kl_loss_sum = kl_loss_sum + step_outs["C_micro"].clamp_min(3.0).sum()
-                node_weight = step_outs["macro_valid_mask"].to(dtype=step_outs["C_macro"].dtype)
-                node_loss_sum = node_loss_sum + (step_outs["C_macro"] * node_weight).sum()
+                kl_loss_sum = kl_loss_sum + self._micro_kl_training_term(step_outs["C_micro_kl_raw"]).sum()
+                node_weight = step_outs["macro_valid_mask"].to(dtype=step_outs["node_nll_loss"].dtype)
+                node_nll_sum = node_nll_sum + (step_outs["node_nll_loss"] * node_weight).sum()
+                local_pred_loss_sum = local_pred_loss_sum + step_outs["local_pred_loss"].sum()
+                topo_pred_loss_sum = topo_pred_loss_sum + step_outs["topo_pred_loss"].sum()
+                prog_pred_loss_sum = prog_pred_loss_sum + step_outs["prog_pred_loss"].sum()
+                local_consistency = torch.exp(
+                    -(
+                        step_outs["delta_control"].detach()
+                        + step_outs["delta_boundary"].detach()
+                        + step_outs["delta_progress"].detach()
+                    ) / 3.0
+                ).clamp(0.05, 0.95)
+                with cuda_autocast(enabled=False):
+                    bind_loss_sum = bind_loss_sum + F.binary_cross_entropy(
+                        step_outs["kappa_self"].float().clamp(1e-4, 1.0 - 1e-4),
+                        local_consistency.float(),
+                        reduction="sum",
+                    )
+                    clarity_loss_sum = clarity_loss_sum + F.binary_cross_entropy(
+                        step_outs["self_clarity"].float().clamp(1e-4, 1.0 - 1e-4),
+                        local_consistency.float(),
+                        reduction="sum",
+                    )
                 ddp_anchor_sum = ddp_anchor_sum + (
-                    0.0 * step_outs["pi_t"].sum()
-                    + 0.0 * step_outs["alpha_prior"].sum()
+                    0.0 * step_outs["alpha_prior"].sum()
                     + 0.0 * step_outs["alpha_progress"].sum()
                 )
-
-                median_value = float(self._c_micro_median_value)
-                pending_pi_values = []
-                pending_targets = []
-                for i in range(self.envs.num_envs):
-                    if active_pending_pi[i] is None:
-                        continue
-                    pending_pi_values.append(active_pending_pi[i].reshape(1))
-                    target = 1.0 if float(step_outs["C_micro"][i].detach().item()) < median_value else 0.0
-                    pending_targets.append(target)
-                if pending_pi_values:
-                    with cuda_autocast(enabled=False):
-                        cal_loss_sum = cal_loss_sum + F.binary_cross_entropy(
-                            torch.cat(pending_pi_values, dim=0).float(),
-                            torch.tensor(pending_targets, device=self.device, dtype=torch.float32),
-                            reduction="sum",
-                        )
-                for i in range(self.envs.num_envs):
-                    active_pending_pi[i] = step_outs["pi_t"][i : i + 1]
-                self._update_c_micro_median(step_outs["C_micro"])
 
             if feedback == "sample":
                 c = torch.distributions.Categorical(probs=nav_probs)
@@ -848,7 +1271,7 @@ class EFESTrainer(StateNavV6Trainer):
                     )
                     a_t = torch.where(use_teacher, teacher_actions, a_t)
             else:
-                a_t = behavior_logits.argmax(dim=-1)
+                a_t = action_logits.argmax(dim=-1)
             cpu_a_t = a_t.cpu().numpy()
 
             safe_a_t = a_t.clamp(min=0, max=nav_outs["gmap_embeds"].size(1) - 1)
@@ -856,12 +1279,16 @@ class EFESTrainer(StateNavV6Trainer):
                 torch.arange(self.envs.num_envs, device=self.device), safe_a_t
             ]
             recurrent_state["prev_action_emb"] = state_model.project_action_features(selected_feats)
-            recurrent_state["prev_self"] = step_outs["h_t"]
+            if bool(getattr(self._efes_cfg(), "use_self_revision", True)):
+                recurrent_state["prev_self"] = step_outs["self_post_z"]
+            else:
+                recurrent_state["prev_self"] = step_outs["self_pred_z"]
             recurrent_state["prev_rssm_h"] = step_outs["rssm_h_t"]
             recurrent_state["prev_z"] = step_outs["z_flat"]
-            recurrent_state["prev_progress"] = step_outs["progress_t"]
-            recurrent_state["prev_pi"] = step_outs["pi_t"]
+            recurrent_state["prev_progress"] = step_outs["self_phase"].unsqueeze(-1)
             recurrent_state["prev_prior_alpha"] = step_outs["alpha_prior"]
+            recurrent_state["prev_topo_novelty"] = step_outs["topo_novelty"]
+            recurrent_state["prev_progress_gap"] = step_outs["delta_progress"]
 
             for i in range(self.envs.num_envs):
                 self._update_backtrack_history(
@@ -869,7 +1296,7 @@ class EFESTrainer(StateNavV6Trainer):
                     vp_ids=nav_inputs["gmap_vp_ids"][i],
                     invalid_mask_row=invalid_candidate_mask[i],
                     visited_mask_row=visited_candidate_mask[i],
-                    score_row=nav_logits[i],
+                    score_row=action_logits[i],
                     combined_health_row=torch.zeros_like(nav_logits[i]),
                     curve_health_row=torch.zeros_like(nav_logits[i]),
                     step_index=stepk,
@@ -977,6 +1404,8 @@ class EFESTrainer(StateNavV6Trainer):
                         continue
                     info = infos[i]
                     ep_id = curr_eps[i].episode_id
+                    if ep_id in self.stat_eps:
+                        continue
                     gt_path = np.array(self.gt_data[str(ep_id)]["locations"]).astype(np.float32)
                     pred_path = np.array(info["position"]["position"])
                     distances = np.array(info["position"]["distance"])
@@ -999,12 +1428,82 @@ class EFESTrainer(StateNavV6Trainer):
                         metric["mean_c_micro"] = self._mean_float_list(diag["c_micro"])
                         metric["mean_c_macro"] = self._mean_float_list(diag["c_macro"])
                         metric["mean_g_t"] = self._mean_float_list(diag["g_t"])
-                        metric["mean_pi_t"] = self._mean_float_list(diag["pi_t"])
                         metric["mean_macro_valid"] = self._mean_float_list(diag["macro_valid"])
                     self.stat_eps[ep_id] = metric
+                    evaluated_eps = len(self.stat_eps)
+                    eval_total = (
+                        int(self.pbar.total)
+                        if self.pbar is not None and self.pbar.total is not None
+                        else evaluated_eps
+                    )
+                    running_means = {
+                        "success": sum(v["success"] for v in self.stat_eps.values()) / evaluated_eps,
+                        "spl": sum(v["spl"] for v in self.stat_eps.values()) / evaluated_eps,
+                        "ndtw": sum(v["ndtw"] for v in self.stat_eps.values()) / evaluated_eps,
+                        "sdtw": sum(v["sdtw"] for v in self.stat_eps.values()) / evaluated_eps,
+                        "distance_to_goal": sum(v["distance_to_goal"] for v in self.stat_eps.values()) / evaluated_eps,
+                    }
+                    if active_eval_diag is not None:
+                        running_means.update(
+                            {
+                                "mean_a_t": sum(v["mean_a_t"] for v in self.stat_eps.values()) / evaluated_eps,
+                                "mean_c_micro": sum(v["mean_c_micro"] for v in self.stat_eps.values()) / evaluated_eps,
+                                "mean_c_macro": sum(v["mean_c_macro"] for v in self.stat_eps.values()) / evaluated_eps,
+                                "mean_g_t": sum(v["mean_g_t"] for v in self.stat_eps.values()) / evaluated_eps,
+                                "mean_macro_valid": sum(v["mean_macro_valid"] for v in self.stat_eps.values()) / evaluated_eps,
+                            }
+                        )
+                    if self.pbar is not None and self.local_rank < 1:
+                        self.pbar.set_postfix(
+                            {
+                                "ep": f"{evaluated_eps}/{eval_total}",
+                                "succ": f"{running_means['success']:.3f}",
+                                "spl": f"{running_means['spl']:.3f}",
+                                "ndtw": f"{running_means['ndtw']:.3f}",
+                                "sdtw": f"{running_means['sdtw']:.3f}",
+                            }
+                        )
+                    logger.info(
+                        "[EP-DONE] ep=%s | succ=%.0f oracle=%.0f | d2g=%.2f steps=%s "
+                        "path_len=%.2f gt_len=%.2f | spl=%.3f ndtw=%.3f sdtw=%.3f",
+                        ep_id,
+                        metric["success"],
+                        metric["oracle_success"],
+                        metric["distance_to_goal"],
+                        metric["steps_taken"],
+                        metric["path_length"],
+                        gt_length,
+                        metric["spl"],
+                        metric["ndtw"],
+                        metric["sdtw"],
+                    )
+                    log_every_episode = max(int(getattr(self.config.EVAL, "LOG_EVERY_EPISODE", 1)), 1)
+                    if self.local_rank < 1 and (
+                        evaluated_eps == 1
+                        or evaluated_eps % log_every_episode == 0
+                        or evaluated_eps == eval_total
+                    ):
+                        logger.info(
+                            "[EVAL-LIVE] ep=%d/%d | success=%.3f spl=%.3f ndtw=%.3f sdtw=%.3f d2g=%.3f",
+                            evaluated_eps,
+                            eval_total,
+                            running_means["success"],
+                            running_means["spl"],
+                            running_means["ndtw"],
+                            running_means["sdtw"],
+                            running_means["distance_to_goal"],
+                        )
+                    self._write_live_eval_progress(
+                        ep_id=ep_id,
+                        metric=metric,
+                        running_means=running_means,
+                        evaluated_eps=evaluated_eps,
+                        eval_total=eval_total,
+                    )
                     if self.pbar is not None:
                         self.pbar.update()
 
+            next_frontier_size = frontier_size.detach().to(dtype=torch.float32)
             done_indices = [i for i, done in enumerate(dones) if done]
             if done_indices:
                 keep_indices = [i for i in range(len(dones)) if not dones[i]]
@@ -1015,24 +1514,24 @@ class EFESTrainer(StateNavV6Trainer):
                     self.gmaps.pop(i)
                     prev_vp.pop(i)
                     active_backtrack_histories.pop(i)
-                    active_c_micro_histories.pop(i)
-                    active_progress_histories.pop(i)
                     active_pos_histories.pop(i)
                     active_vp_histories.pop(i)
-                    active_pending_pi.pop(i)
                     if active_eval_diag is not None:
                         active_eval_diag.pop(i)
 
                 if keep_indices:
                     keep_tensor = torch.tensor(keep_indices, device=self.device, dtype=torch.long)
+                    prev_frontier_size = prev_frontier_size.index_select(0, keep_tensor)
+                    next_frontier_size = next_frontier_size.index_select(0, keep_tensor)
                     for key in (
                         "prev_self",
                         "prev_rssm_h",
                         "prev_z",
                         "prev_action_emb",
                         "prev_progress",
-                        "prev_pi",
                         "prev_prior_alpha",
+                        "prev_topo_novelty",
+                        "prev_progress_gap",
                     ):
                         recurrent_state[key] = recurrent_state[key].index_select(0, keep_tensor)
                     topo_bank = topo_bank.index_select(keep_indices)
@@ -1041,12 +1540,11 @@ class EFESTrainer(StateNavV6Trainer):
                 break
 
             for i in range(self.envs.num_envs):
-                active_c_micro_histories[i].append(float(step_outs["C_micro"][i].detach().item()))
-                active_progress_histories[i].append(float(step_outs["progress_t"][i].detach().item()))
                 active_pos_histories[i].append(
                     torch.as_tensor(cur_pos[i], device=self.device, dtype=torch.float32)
                 )
                 active_vp_histories[i].append(cur_vp[i])
+            prev_frontier_size = next_frontier_size
 
             batch_prep_start = self._timing_now()
             observations = extract_instruction_tokens(
@@ -1064,14 +1562,45 @@ class EFESTrainer(StateNavV6Trainer):
             total_actions_f = max(float(total_actions), 1.0)
             total_macro_updates_f = max(float(total_macro_updates), 1.0)
             plan_loss = plan_loss_sum / total_actions_f
+            bind_loss = bind_loss_sum / total_actions_f
             kl_loss = kl_loss_sum / total_actions_f
-            node_loss = node_loss_sum / total_macro_updates_f
-            cal_loss = cal_loss_sum / total_actions_f
+            node_nll_loss = node_nll_sum / total_macro_updates_f
+            local_pred_loss = local_pred_loss_sum / total_actions_f
+            topo_pred_loss = topo_pred_loss_sum / total_actions_f
+            prog_pred_loss = prog_pred_loss_sum / total_actions_f
+            clarity_loss = clarity_loss_sum / total_actions_f
+            self_loss = kl_loss
+            cons_loss = (
+                float(self._efes_cfg().lambda_local) * local_pred_loss
+                + float(self._efes_cfg().lambda_topo) * topo_pred_loss
+                + float(self._efes_cfg().lambda_prog) * prog_pred_loss
+                + float(self._efes_cfg().lambda_node) * node_nll_loss
+            )
+            aux_loss = (
+                float(self._efes_cfg().lambda_bind) * bind_loss
+                + float(self._efes_cfg().lambda_clarity) * clarity_loss
+            )
+            condition_policy_kl = torch.nan_to_num(
+                condition_policy_kl_sum / total_actions_f,
+                nan=0.0,
+                posinf=0.0,
+                neginf=0.0,
+            )
+            condition_beta_mean = condition_gate_sum / total_actions_f
+            condition_budget_loss = F.relu(
+                condition_beta_mean - float(getattr(self._efes_cfg(), "conditioner_gate_budget", 0.08))
+            ).square()
+            lambda_condition_kl = float(getattr(self._efes_cfg(), "lambda_condition_kl", 0.0))
+            lambda_condition_budget = float(getattr(self._efes_cfg(), "lambda_condition_budget", 0.05))
+            trust_loss = lambda_condition_budget * condition_budget_loss
+            if lambda_condition_kl != 0.0:
+                trust_loss = trust_loss + lambda_condition_kl * condition_policy_kl
             total_loss = (
-                plan_loss
-                + float(self._efes_cfg().lambda_kl) * kl_loss
-                + float(self._efes_cfg().lambda_node) * node_loss
-                + float(self._efes_cfg().lambda_cal) * cal_loss
+                float(self._efes_cfg().lambda_plan) * plan_loss
+                + float(getattr(self._efes_cfg(), "lambda_self", 0.2)) * self_loss
+                + float(getattr(self._efes_cfg(), "lambda_cons", 0.5)) * cons_loss
+                + float(getattr(self._efes_cfg(), "lambda_aux", 0.0)) * aux_loss
+                + trust_loss
                 + ddp_anchor_sum
             )
             self.loss = self.loss + ml_weight * total_loss
@@ -1079,21 +1608,44 @@ class EFESTrainer(StateNavV6Trainer):
             scalar_metrics = {
                 "total_loss": float(total_loss.detach().item()),
                 "plan_loss": float(plan_loss.detach().item()),
+                "self_loss": float(self_loss.detach().item()),
+                "cons_loss": float(cons_loss.detach().item()),
+                "aux_loss": float(aux_loss.detach().item()),
+                "trust_loss": float(trust_loss.detach().item()),
+                "bind_loss": float(bind_loss.detach().item()),
                 "kl_loss": float(kl_loss.detach().item()),
-                "node_loss": float(node_loss.detach().item()),
-                "cal_loss": float(cal_loss.detach().item()),
+                "node_nll_loss": float(node_nll_loss.detach().item()),
+                "local_pred_loss": float(local_pred_loss.detach().item()),
+                "topo_pred_loss": float(topo_pred_loss.detach().item()),
+                "prog_pred_loss": float(prog_pred_loss.detach().item()),
+                "clarity_loss": float(clarity_loss.detach().item()),
+                "condition_policy_kl": float(condition_policy_kl.detach().item()),
+                "condition_budget_loss": float(condition_budget_loss.detach().item()),
             }
             sum_metrics = {
                 "c_micro_sum": float(c_micro_sum.detach().item()),
-                "c_macro_sum": float(c_macro_sum.detach().item()),
+                "c_macro_diag_sum": float(c_macro_diag_sum.detach().item()),
+                "u_macro_sum": float(u_macro_sum.detach().item()),
                 "g_t_sum": float(g_t_sum.detach().item()),
-                "a_t_sum": float(a_t_sum.detach().item()),
-                "pi_t_sum": float(pi_t_sum.detach().item()),
+                "kappa_self_sum": float(kappa_self_sum.detach().item()),
+                "self_clarity_sum": float(self_clarity_sum.detach().item()),
+                "r_local_sum": float(r_local_sum.detach().item()),
+                "r_topo_sum": float(r_topo_sum.detach().item()),
+                "r_ground_sum": float(r_ground_sum.detach().item()),
+                "rupture_conf_sum": float(rupture_conf_sum.detach().item()),
+                "self_agency_sum": float(self_agency_sum.detach().item()),
+                "self_phase_sum": float(self_phase_sum.detach().item()),
+                "self_continuity_sum": float(self_continuity_sum.detach().item()),
+                "self_mismatch_sum": float(self_mismatch_sum.detach().item()),
                 "macro_valid_sum": float(macro_valid_sum.detach().item()),
+                "condition_gate_sum": float(condition_gate_sum.detach().item()),
+                "condition_delta_sum": float(condition_delta_sum.detach().item()),
+                "condition_policy_kl_sum": float(condition_policy_kl_sum.detach().item()),
+                "score_before_sum": float(score_before_sum.detach().item()),
+                "score_after_sum": float(score_after_sum.detach().item()),
                 "mode_count_0": float(mode_count_sum[0].detach().item()),
                 "mode_count_1": float(mode_count_sum[1].detach().item()),
                 "mode_count_2": float(mode_count_sum[2].detach().item()),
-                "mode_count_3": float(mode_count_sum[3].detach().item()),
             }
             count_metrics = {
                 "total_actions": float(total_actions),
@@ -1112,21 +1664,58 @@ class EFESTrainer(StateNavV6Trainer):
                     0: float(sum_metrics["mode_count_0"]),
                     1: float(sum_metrics["mode_count_1"]),
                     2: float(sum_metrics["mode_count_2"]),
-                    3: float(sum_metrics["mode_count_3"]),
                 }
             )
             self._last_step_metrics = {
                 **scalar_metrics,
+                "contract_version": self.contract_version,
                 "total_actions": float(count_metrics["total_actions"]),
                 "total_macro_updates": float(count_metrics["total_macro_updates"]),
                 "c_micro_mean": float(sum_metrics["c_micro_sum"]) / total_actions_global,
-                "c_macro_mean": float(sum_metrics["c_macro_sum"]) / total_macro_updates_global,
+                "c_macro_diag_mean": float(sum_metrics["c_macro_diag_sum"]) / total_macro_updates_global,
+                "u_macro_mean": float(sum_metrics["u_macro_sum"]) / total_actions_global,
                 "g_t_mean": float(sum_metrics["g_t_sum"]) / total_actions_global,
-                "a_t_mean": float(sum_metrics["a_t_sum"]) / total_actions_global,
-                "pi_t_mean": float(sum_metrics["pi_t_sum"]) / total_actions_global,
+                "self_mismatch_mean": float(sum_metrics["self_mismatch_sum"]) / total_actions_global,
+                "kappa_self_mean": float(sum_metrics["kappa_self_sum"]) / total_actions_global,
+                "self_clarity_mean": float(sum_metrics["self_clarity_sum"]) / total_actions_global,
+                "r_local_mean": float(sum_metrics["r_local_sum"]) / total_actions_global,
+                "r_topo_mean": float(sum_metrics["r_topo_sum"]) / total_actions_global,
+                "r_ground_mean": float(sum_metrics["r_ground_sum"]) / total_actions_global,
+                "rupture_conf_mean": float(sum_metrics["rupture_conf_sum"]) / total_actions_global,
+                "self_agency_mean": float(sum_metrics["self_agency_sum"]) / total_actions_global,
+                "self_phase_mean": float(sum_metrics["self_phase_sum"]) / total_actions_global,
+                "self_continuity_mean": float(sum_metrics["self_continuity_sum"]) / total_actions_global,
                 "macro_valid_ratio": float(sum_metrics["macro_valid_sum"]) / total_actions_global,
-                "recovery_mode_hist": mode_hist,
+                "mode_hist_argmax": mode_hist,
+                "condition_gate_mean": float(sum_metrics["condition_gate_sum"]) / total_actions_global,
+                "condition_delta_mean": float(sum_metrics["condition_delta_sum"]) / total_actions_global,
+                "condition_policy_kl_mean": float(sum_metrics["condition_policy_kl_sum"]) / total_actions_global,
+                "score_before_mean": float(sum_metrics["score_before_sum"]) / total_actions_global,
+                "score_after_mean": float(sum_metrics["score_after_sum"]) / total_actions_global,
                 **timing_metrics,
             }
             for key, value in scalar_metrics.items():
                 self.logs[key].append(value)
+            for key in (
+                "c_micro_mean",
+                "c_macro_diag_mean",
+                "u_macro_mean",
+                "g_t_mean",
+                "self_mismatch_mean",
+                "kappa_self_mean",
+                "self_clarity_mean",
+                "r_local_mean",
+                "r_topo_mean",
+                "r_ground_mean",
+                "rupture_conf_mean",
+                "self_agency_mean",
+                "self_phase_mean",
+                "self_continuity_mean",
+                "macro_valid_ratio",
+                "condition_gate_mean",
+                "condition_delta_mean",
+                "condition_policy_kl_mean",
+                "score_before_mean",
+                "score_after_mean",
+            ):
+                self.logs[key].append(float(self._last_step_metrics[key]))

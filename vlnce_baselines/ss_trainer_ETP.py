@@ -1,4 +1,5 @@
 import gc
+import json
 import os
 import sys
 import random
@@ -576,6 +577,7 @@ class RLTrainer(BaseVLNCETrainer):
         writer: TensorboardWriter,
         checkpoint_index: int = 0,
     ):
+        self._eval_checkpoint_index = int(checkpoint_index)
         if self.local_rank < 1:
             logger.info(f"checkpoint_path: {checkpoint_path}")
         self.config.defrost()
@@ -692,6 +694,17 @@ class RLTrainer(BaseVLNCETrainer):
                 aggregated_states[k] = v
         
         split = self.config.TASK_CONFIG.DATASET.SPLIT
+        checkpoint_metadata = self._collect_checkpoint_result_metadata("eval")
+        if checkpoint_metadata:
+            checkpoint_metadata.update(
+                {
+                    "split": split,
+                    "checkpoint_index": int(checkpoint_index),
+                    "world_size": int(self.world_size),
+                    "local_rank": int(self.local_rank),
+                    "episodes_evaluated": int(total),
+                }
+            )
 
         if self.local_rank < 1:
             logger.info(f"Episodes evaluated: {total}")
@@ -708,6 +721,10 @@ class RLTrainer(BaseVLNCETrainer):
             )
             with open(fname, "w") as f:
                 json.dump(self.stat_eps, f, indent=2)
+            self._write_checkpoint_result_metadata(
+                fname.replace(".json", ".meta.json"),
+                checkpoint_metadata,
+            )
 
             if self.local_rank < 1 and self.config.EVAL.SAVE_RESULTS:
                 fname = os.path.join(
@@ -716,12 +733,56 @@ class RLTrainer(BaseVLNCETrainer):
                 )
                 with open(fname, "w") as f:
                     json.dump(aggregated_states, f, indent=2)
+                self._write_checkpoint_result_metadata(
+                    fname.replace(".json", ".meta.json"),
+                    checkpoint_metadata,
+                )
         except OSError as exc:
             logger.warning(
                 "Failed to save eval results under %s: %s",
                 self.config.RESULTS_DIR,
                 exc,
             )
+
+    def _write_live_eval_progress(self, ep_id, metric, running_means, evaluated_eps, eval_total) -> None:
+        if not bool(getattr(self.config.EVAL, "SAVE_RESULTS", True)):
+            return
+        split = str(self.config.TASK_CONFIG.DATASET.SPLIT)
+        checkpoint_index = int(getattr(self, "_eval_checkpoint_index", 0))
+        os.makedirs(self.config.RESULTS_DIR, exist_ok=True)
+        event = {
+            "episode_id": str(ep_id),
+            "evaluated": int(evaluated_eps),
+            "total": int(eval_total),
+            "split": split,
+            "checkpoint_index": checkpoint_index,
+            "rank": int(self.local_rank),
+            "world_size": int(self.world_size),
+            "metric": {k: float(v) for k, v in metric.items()},
+            "running": {k: float(v) for k, v in running_means.items()},
+        }
+        live_path = os.path.join(
+            self.config.RESULTS_DIR,
+            f"stats_live_ckpt_{checkpoint_index}_{split}_r{self.local_rank}_w{self.world_size}.jsonl",
+        )
+        with jsonlines.open(live_path, mode="a") as writer:
+            writer.write(event)
+
+        if self.local_rank < 1:
+            partial = {
+                "evaluated": int(evaluated_eps),
+                "total": int(eval_total),
+                "split": split,
+                "checkpoint_index": checkpoint_index,
+                "running": {k: float(v) for k, v in running_means.items()},
+            }
+            partial.update(self._collect_checkpoint_result_metadata("eval-live"))
+            partial_path = os.path.join(
+                self.config.RESULTS_DIR,
+                f"stats_partial_ckpt_{checkpoint_index}_{split}.json",
+            )
+            with open(partial_path, "w") as f:
+                json.dump(partial, f, indent=2, sort_keys=True)
 
     @torch.no_grad()
     def inference(self):
@@ -839,10 +900,24 @@ class RLTrainer(BaseVLNCETrainer):
 
         pred_dir = os.path.dirname(self.config.INFERENCE.PREDICTIONS_FILE) or "."
         os.makedirs(pred_dir, exist_ok=True)
+        inference_metadata = self._collect_checkpoint_result_metadata("inference")
+        if inference_metadata:
+            inference_metadata.update(
+                {
+                    "split": str(self.config.INFERENCE.SPLIT),
+                    "prediction_format": str(self.config.MODEL.task_type),
+                    "predictions_file": str(self.config.INFERENCE.PREDICTIONS_FILE),
+                    "episodes_predicted": int(len(self.path_eps)),
+                }
+            )
 
         if self.config.MODEL.task_type == "r2r":
             with open(self.config.INFERENCE.PREDICTIONS_FILE, "w") as f:
                 json.dump(self.path_eps, f, indent=2)
+            self._write_checkpoint_result_metadata(
+                "{}.meta.json".format(self.config.INFERENCE.PREDICTIONS_FILE),
+                inference_metadata,
+            )
             logger.info(f"Predictions saved to: {self.config.INFERENCE.PREDICTIONS_FILE}")
         else:  # use 'rxr' format for rxr-habitat leaderboard
             preds = []
@@ -855,6 +930,10 @@ class RLTrainer(BaseVLNCETrainer):
             preds.sort(key=lambda x: x["instruction_id"])
             with jsonlines.open(self.config.INFERENCE.PREDICTIONS_FILE, mode="w") as writer:
                 writer.write_all(preds)
+            self._write_checkpoint_result_metadata(
+                "{}.meta.json".format(self.config.INFERENCE.PREDICTIONS_FILE),
+                inference_metadata,
+            )
             logger.info(f"Predictions saved to: {self.config.INFERENCE.PREDICTIONS_FILE}")
 
     def get_pos_ori(self):
@@ -1108,6 +1187,8 @@ class RLTrainer(BaseVLNCETrainer):
                         continue
                     info = infos[i]
                     ep_id = curr_eps[i].episode_id
+                    if ep_id in self.stat_eps:
+                        continue
                     gt_path = np.array(self.gt_data[str(ep_id)]['locations']).astype(np.float32)
                     pred_path = np.array(info['position']['position'])
                     distances = np.array(info['position']['distance'])
@@ -1171,6 +1252,13 @@ class RLTrainer(BaseVLNCETrainer):
                             f"sdtw={running_means['sdtw']:.3f} "
                             f"d2g={running_means['distance_to_goal']:.3f}"
                         )
+                    self._write_live_eval_progress(
+                        ep_id=ep_id,
+                        metric=metric,
+                        running_means=running_means,
+                        evaluated_eps=evaluated_eps,
+                        eval_total=eval_total,
+                    )
                     if self.pbar is not None:
                         self.pbar.update()
 

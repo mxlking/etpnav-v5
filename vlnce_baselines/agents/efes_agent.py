@@ -80,6 +80,8 @@ class EFESAgent(nn.Module):
         )
         self.action_encoder = nn.Linear(self.cand_dim, self.d_action)
 
+        self.apply_static_freeze()
+
     @classmethod
     def from_config(
         cls,
@@ -125,6 +127,23 @@ class EFESAgent(nn.Module):
 
     def project_action_features(self, action_feats: Tensor) -> Tensor:
         return self.action_encoder(action_feats)
+
+    def apply_static_freeze(self) -> None:
+        # The compressor only prepares detached node features for the runtime
+        # topo bank. It is not supervised by any loss and should not be part of
+        # DDP gradient reduction.
+        for param in self.macro_surprise.compressor.parameters():
+            param.requires_grad_(False)
+
+        if not self.use_macro:
+            for param in self.macro_surprise.parameters():
+                param.requires_grad_(False)
+        if not self.use_confidence:
+            for param in self.self_confidence.parameters():
+                param.requires_grad_(False)
+        if not self.use_recovery:
+            for param in self.dual_recovery.parameters():
+                param.requires_grad_(False)
 
     @staticmethod
     def _masked_mean(scores: Tensor, valid_mask: Optional[Tensor]) -> Tensor:

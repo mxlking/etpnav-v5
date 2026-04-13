@@ -485,6 +485,38 @@ _C.EFES_SELF.LOGGING.log_full_model_report_to_runtime = False
 _C.EFES_SELF.LOGGING.save_best_by_train_loss = False
 _C.EFES_SELF.LOGGING.log_diag_metrics = True
 
+# -----------------------------------------------------------------------------
+# EFES-V3 CONFIG
+# -----------------------------------------------------------------------------
+_C.EFES_V3 = CN()
+_C.EFES_V3.d_model = 768
+_C.EFES_V3.d_z = 256
+_C.EFES_V3.d_h = 512
+_C.EFES_V3.d_action = 128
+_C.EFES_V3.max_nodes = 50
+_C.EFES_V3.sigma_min = 0.01
+_C.EFES_V3.history_window = 5
+_C.EFES_V3.lr = 1.0e-4
+_C.EFES_V3.alpha = 0.5
+_C.EFES_V3.beta = 0.1
+_C.EFES_V3.lambda_macro = 1.0
+_C.EFES_V3.grad_clip_norm = 5.0
+_C.EFES_V3.max_keep_checkpoints = 3
+_C.EFES_V3.gate_bias = -2.0
+_C.EFES_V3.max_delta = 1.0
+_C.EFES_V3.action_source = "corrected"
+_C.EFES_V3.use_somatic_loop = True
+_C.EFES_V3.use_predictor = True
+_C.EFES_V3.use_corrector = True
+_C.EFES_V3.LOGGING = CN()
+_C.EFES_V3.LOGGING.use_tqdm = True
+_C.EFES_V3.LOGGING.step_log_every = 1
+_C.EFES_V3.LOGGING.write_step_metrics = True
+_C.EFES_V3.LOGGING.step_metrics_filename = "step_metrics.tsv"
+_C.EFES_V3.LOGGING.log_full_model_report_to_runtime = False
+_C.EFES_V3.LOGGING.save_best_by_train_loss = False
+_C.EFES_V3.LOGGING.log_diag_metrics = True
+
 
 def purge_keys(config: CN, keys: List[str]) -> None:
     for k in keys:
@@ -884,6 +916,43 @@ def coerce_legacy_scalar_types(config: CN) -> None:
         config.EFES_SELF.LOGGING.save_best_by_train_loss
     )
     config.EFES_SELF.LOGGING.log_diag_metrics = _to_bool(config.EFES_SELF.LOGGING.log_diag_metrics)
+
+    config.EFES_V3.d_model = int(config.EFES_V3.d_model)
+    config.EFES_V3.d_z = int(config.EFES_V3.d_z)
+    config.EFES_V3.d_h = int(config.EFES_V3.d_h)
+    config.EFES_V3.d_action = int(config.EFES_V3.d_action)
+    config.EFES_V3.max_nodes = int(config.EFES_V3.max_nodes)
+    config.EFES_V3.sigma_min = float(config.EFES_V3.sigma_min)
+    config.EFES_V3.history_window = int(config.EFES_V3.history_window)
+    config.EFES_V3.lr = float(config.EFES_V3.lr)
+    config.EFES_V3.alpha = float(config.EFES_V3.alpha)
+    config.EFES_V3.beta = float(config.EFES_V3.beta)
+    config.EFES_V3.lambda_macro = float(config.EFES_V3.lambda_macro)
+    config.EFES_V3.grad_clip_norm = float(config.EFES_V3.grad_clip_norm)
+    config.EFES_V3.max_keep_checkpoints = int(config.EFES_V3.max_keep_checkpoints)
+    config.EFES_V3.gate_bias = float(config.EFES_V3.gate_bias)
+    config.EFES_V3.max_delta = float(config.EFES_V3.max_delta)
+    config.EFES_V3.action_source = str(getattr(config.EFES_V3, "action_source", "corrected")).strip().lower()
+    if config.EFES_V3.action_source not in {"corrected", "etp"}:
+        raise ValueError(
+            "Unknown EFES_V3.action_source={}. Expected corrected or etp.".format(
+                config.EFES_V3.action_source
+            )
+        )
+    config.EFES_V3.use_somatic_loop = _to_bool(getattr(config.EFES_V3, "use_somatic_loop", True))
+    config.EFES_V3.use_predictor = _to_bool(getattr(config.EFES_V3, "use_predictor", True))
+    config.EFES_V3.use_corrector = _to_bool(getattr(config.EFES_V3, "use_corrector", True))
+    config.EFES_V3.LOGGING.use_tqdm = _to_bool(config.EFES_V3.LOGGING.use_tqdm)
+    config.EFES_V3.LOGGING.step_log_every = int(config.EFES_V3.LOGGING.step_log_every)
+    config.EFES_V3.LOGGING.write_step_metrics = _to_bool(config.EFES_V3.LOGGING.write_step_metrics)
+    config.EFES_V3.LOGGING.step_metrics_filename = str(config.EFES_V3.LOGGING.step_metrics_filename)
+    config.EFES_V3.LOGGING.log_full_model_report_to_runtime = _to_bool(
+        config.EFES_V3.LOGGING.log_full_model_report_to_runtime
+    )
+    config.EFES_V3.LOGGING.save_best_by_train_loss = _to_bool(
+        config.EFES_V3.LOGGING.save_best_by_train_loss
+    )
+    config.EFES_V3.LOGGING.log_diag_metrics = _to_bool(config.EFES_V3.LOGGING.log_diag_metrics)
 
 
 def get_config(

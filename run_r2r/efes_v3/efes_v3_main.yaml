@@ -1,0 +1,101 @@
+BASE_TASK_CONFIG_PATH: run_r2r/r2r_vlnce.yaml
+SIMULATOR_GPU_IDS: [0]
+TORCH_GPU_ID: 0
+TORCH_GPU_IDS: [0]
+TRAINER_NAME: EFESV3
+GPU_NUMBERS: 1
+NUM_ENVIRONMENTS: 8
+TENSORBOARD_DIR: data/logs/tensorboard_dirs/
+CHECKPOINT_FOLDER: data/logs/checkpoints/
+EVAL_CKPT_PATH_DIR: data/logs/checkpoints/
+RESULTS_DIR: data/logs/eval_results/
+VIDEO_DIR: data/logs/video/
+
+INFERENCE:
+  SPLIT: test
+  USE_CKPT_CONFIG: False
+  SAMPLE: False
+  CKPT_PATH: ''
+  PREDICTIONS_FILE: ''
+  FORMAT: r2r
+  EPISODE_COUNT: -1
+
+EVAL:
+  USE_CKPT_CONFIG: False
+  SPLIT: val_unseen
+  EPISODE_COUNT: -1
+  EPISODE_ID_ALLOWLIST: ""
+  LOG_EVERY_EPISODE: 1
+  CKPT_PATH_DIR: ''
+  fast_eval: False
+
+IL:
+  iters: 15000
+  log_every: 200
+  lr: 1.0e-4
+  batch_size: 4
+  ml_weight: 1.0
+  expert_policy: spl
+  load_from_ckpt: True
+  ckpt_to_load: data/logs/checkpoints/release_r2r/ckpt.iter12000.pth
+  is_requeue: False
+  sample_ratio: 0.75
+  decay_interval: 3000
+  max_traj_len: 15
+  max_text_len: 80
+  loc_noise: 0.5
+  waypoint_aug: False
+  ghost_aug: 0.0
+  back_algo: control
+  tryout: True
+
+MODEL:
+  task_type: r2r
+  policy_name: PolicyViewSelectionETP
+  NUM_ANGLES: 12
+  pretrained_path: pretrained/ETP/mlm.sap_r2r/ckpts/model_step_82500.pt
+  fix_lang_embedding: False
+  fix_pano_embedding: False
+  use_depth_embedding: True
+  use_sprels: True
+  merge_ghost: True
+  consume_ghost: True
+  spatial_output: False
+  RGB_ENCODER:
+    output_size: 512
+  DEPTH_ENCODER:
+    output_size: 256
+  VISUAL_DIM:
+    vis_hidden: 768
+    directional: 128
+  INSTRUCTION_ENCODER:
+    bidirectional: True
+
+EFES_V3:
+  d_model: 768
+  d_z: 256
+  d_h: 512
+  d_action: 128
+  max_nodes: 50
+  sigma_min: 0.01
+  history_window: 5
+  lr: 1.0e-4
+  alpha: 0.5
+  beta: 0.1
+  lambda_macro: 1.0
+  grad_clip_norm: 5.0
+  max_keep_checkpoints: 3
+  gate_bias: -2.0
+  max_delta: 1.0
+  action_source: corrected
+  use_somatic_loop: true
+  use_predictor: true
+  use_corrector: true
+  LOGGING:
+    use_tqdm: True
+    step_log_every: 1
+    write_step_metrics: True
+    step_metrics_filename: step_metrics.tsv
+    log_full_model_report_to_runtime: False
+    save_best_by_train_loss: False
+    log_diag_metrics: True

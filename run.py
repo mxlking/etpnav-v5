@@ -17,6 +17,7 @@ from vlnce_baselines.models.Policy_ViewSelection_ETP import PolicyViewSelectionE
 from vlnce_baselines.trainers.train_efes import EFESTrainer  # noqa: F401
 from vlnce_baselines.trainers.train_efes_self import EFESSelfTrainer  # noqa: F401
 from vlnce_baselines.trainers.train_efes_v3 import EFESV3Trainer  # noqa: F401
+from vlnce_baselines.trainers.train_efes_v3_theory import EFESV3TheoryTrainer  # noqa: F401
 from vlnce_baselines.trainers.train_efes_v2 import EFESV2Trainer  # noqa: F401
 from vlnce_baselines.trainers.train_statenav_v5_stage1 import StateNavV5Stage1Trainer  # noqa: F401
 from vlnce_baselines.trainers.train_statenav_v5_stage2 import StateNavV5Stage2Trainer  # noqa: F401

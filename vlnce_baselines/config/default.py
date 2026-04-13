@@ -517,6 +517,52 @@ _C.EFES_V3.LOGGING.log_full_model_report_to_runtime = False
 _C.EFES_V3.LOGGING.save_best_by_train_loss = False
 _C.EFES_V3.LOGGING.log_diag_metrics = True
 
+# -----------------------------------------------------------------------------
+# EFES-V3 THEORY CONFIG
+# -----------------------------------------------------------------------------
+_C.EFES_V3_THEORY = CN()
+_C.EFES_V3_THEORY.d_model = 768
+_C.EFES_V3_THEORY.d_z = 256
+_C.EFES_V3_THEORY.d_h = 512
+_C.EFES_V3_THEORY.d_action = 128
+_C.EFES_V3_THEORY.max_nodes = 50
+_C.EFES_V3_THEORY.sigma_min = 0.01
+_C.EFES_V3_THEORY.sigma_max = 1.0
+_C.EFES_V3_THEORY.history_window = 5
+_C.EFES_V3_THEORY.lr = 1.0e-4
+_C.EFES_V3_THEORY.alpha = 0.5
+_C.EFES_V3_THEORY.beta = 0.1
+_C.EFES_V3_THEORY.lambda_macro = 1.0
+_C.EFES_V3_THEORY.lambda_fe = 1.0
+_C.EFES_V3_THEORY.lambda_cal = 1.0
+_C.EFES_V3_THEORY.lambda_safe = 0.05
+_C.EFES_V3_THEORY.lambda_mi = 0.01
+_C.EFES_V3_THEORY.mi_temperature = 0.1
+_C.EFES_V3_THEORY.grad_clip_norm = 5.0
+_C.EFES_V3_THEORY.max_keep_checkpoints = 3
+_C.EFES_V3_THEORY.gate_bias = -2.0
+_C.EFES_V3_THEORY.delta_bound = 1.0
+_C.EFES_V3_THEORY.lambda_scale = 1.0
+_C.EFES_V3_THEORY.action_source = "corrected"
+_C.EFES_V3_THEORY.gate_threshold = 0.5
+_C.EFES_V3_THEORY.use_body_loop = True
+_C.EFES_V3_THEORY.use_predictor = True
+_C.EFES_V3_THEORY.use_corrector = True
+_C.EFES_V3_THEORY.use_shifted_surprise = True
+_C.EFES_V3_THEORY.use_shared_valid_mask_only = True
+_C.EFES_V3_THEORY.use_safe_kl = True
+_C.EFES_V3_THEORY.use_sigma_max_clamp = True
+_C.EFES_V3_THEORY.use_dual_gate = True
+_C.EFES_V3_THEORY.use_mi_proxy = True
+_C.EFES_V3_THEORY.LOGGING = CN()
+_C.EFES_V3_THEORY.LOGGING.use_tqdm = True
+_C.EFES_V3_THEORY.LOGGING.step_log_every = 1
+_C.EFES_V3_THEORY.LOGGING.write_step_metrics = True
+_C.EFES_V3_THEORY.LOGGING.step_metrics_filename = "step_metrics.tsv"
+_C.EFES_V3_THEORY.LOGGING.log_full_model_report_to_runtime = False
+_C.EFES_V3_THEORY.LOGGING.save_best_by_train_loss = False
+_C.EFES_V3_THEORY.LOGGING.log_diag_metrics = True
+
 
 def purge_keys(config: CN, keys: List[str]) -> None:
     for k in keys:
@@ -953,6 +999,65 @@ def coerce_legacy_scalar_types(config: CN) -> None:
         config.EFES_V3.LOGGING.save_best_by_train_loss
     )
     config.EFES_V3.LOGGING.log_diag_metrics = _to_bool(config.EFES_V3.LOGGING.log_diag_metrics)
+
+    config.EFES_V3_THEORY.d_model = int(config.EFES_V3_THEORY.d_model)
+    config.EFES_V3_THEORY.d_z = int(config.EFES_V3_THEORY.d_z)
+    config.EFES_V3_THEORY.d_h = int(config.EFES_V3_THEORY.d_h)
+    config.EFES_V3_THEORY.d_action = int(config.EFES_V3_THEORY.d_action)
+    config.EFES_V3_THEORY.max_nodes = int(config.EFES_V3_THEORY.max_nodes)
+    config.EFES_V3_THEORY.sigma_min = float(config.EFES_V3_THEORY.sigma_min)
+    config.EFES_V3_THEORY.sigma_max = float(config.EFES_V3_THEORY.sigma_max)
+    config.EFES_V3_THEORY.history_window = int(config.EFES_V3_THEORY.history_window)
+    config.EFES_V3_THEORY.lr = float(config.EFES_V3_THEORY.lr)
+    config.EFES_V3_THEORY.alpha = float(config.EFES_V3_THEORY.alpha)
+    config.EFES_V3_THEORY.beta = float(config.EFES_V3_THEORY.beta)
+    config.EFES_V3_THEORY.lambda_macro = float(config.EFES_V3_THEORY.lambda_macro)
+    config.EFES_V3_THEORY.lambda_fe = float(config.EFES_V3_THEORY.lambda_fe)
+    config.EFES_V3_THEORY.lambda_cal = float(config.EFES_V3_THEORY.lambda_cal)
+    config.EFES_V3_THEORY.lambda_safe = float(config.EFES_V3_THEORY.lambda_safe)
+    config.EFES_V3_THEORY.lambda_mi = float(config.EFES_V3_THEORY.lambda_mi)
+    config.EFES_V3_THEORY.mi_temperature = float(config.EFES_V3_THEORY.mi_temperature)
+    config.EFES_V3_THEORY.grad_clip_norm = float(config.EFES_V3_THEORY.grad_clip_norm)
+    config.EFES_V3_THEORY.max_keep_checkpoints = int(config.EFES_V3_THEORY.max_keep_checkpoints)
+    config.EFES_V3_THEORY.gate_bias = float(config.EFES_V3_THEORY.gate_bias)
+    config.EFES_V3_THEORY.delta_bound = float(config.EFES_V3_THEORY.delta_bound)
+    config.EFES_V3_THEORY.lambda_scale = float(config.EFES_V3_THEORY.lambda_scale)
+    config.EFES_V3_THEORY.gate_threshold = float(config.EFES_V3_THEORY.gate_threshold)
+    config.EFES_V3_THEORY.action_source = str(getattr(config.EFES_V3_THEORY, "action_source", "corrected")).strip().lower()
+    if config.EFES_V3_THEORY.action_source not in {"corrected", "etp"}:
+        raise ValueError(
+            "Unknown EFES_V3_THEORY.action_source={}. Expected corrected or etp.".format(
+                config.EFES_V3_THEORY.action_source
+            )
+        )
+    config.EFES_V3_THEORY.use_body_loop = _to_bool(getattr(config.EFES_V3_THEORY, "use_body_loop", True))
+    config.EFES_V3_THEORY.use_predictor = _to_bool(getattr(config.EFES_V3_THEORY, "use_predictor", True))
+    config.EFES_V3_THEORY.use_corrector = _to_bool(getattr(config.EFES_V3_THEORY, "use_corrector", True))
+    config.EFES_V3_THEORY.use_shifted_surprise = _to_bool(getattr(config.EFES_V3_THEORY, "use_shifted_surprise", True))
+    config.EFES_V3_THEORY.use_shared_valid_mask_only = _to_bool(
+        getattr(config.EFES_V3_THEORY, "use_shared_valid_mask_only", True)
+    )
+    config.EFES_V3_THEORY.use_safe_kl = _to_bool(getattr(config.EFES_V3_THEORY, "use_safe_kl", True))
+    config.EFES_V3_THEORY.use_sigma_max_clamp = _to_bool(
+        getattr(config.EFES_V3_THEORY, "use_sigma_max_clamp", True)
+    )
+    config.EFES_V3_THEORY.use_dual_gate = _to_bool(getattr(config.EFES_V3_THEORY, "use_dual_gate", True))
+    config.EFES_V3_THEORY.use_mi_proxy = _to_bool(getattr(config.EFES_V3_THEORY, "use_mi_proxy", True))
+    config.EFES_V3_THEORY.LOGGING.use_tqdm = _to_bool(config.EFES_V3_THEORY.LOGGING.use_tqdm)
+    config.EFES_V3_THEORY.LOGGING.step_log_every = int(config.EFES_V3_THEORY.LOGGING.step_log_every)
+    config.EFES_V3_THEORY.LOGGING.write_step_metrics = _to_bool(
+        config.EFES_V3_THEORY.LOGGING.write_step_metrics
+    )
+    config.EFES_V3_THEORY.LOGGING.step_metrics_filename = str(config.EFES_V3_THEORY.LOGGING.step_metrics_filename)
+    config.EFES_V3_THEORY.LOGGING.log_full_model_report_to_runtime = _to_bool(
+        config.EFES_V3_THEORY.LOGGING.log_full_model_report_to_runtime
+    )
+    config.EFES_V3_THEORY.LOGGING.save_best_by_train_loss = _to_bool(
+        config.EFES_V3_THEORY.LOGGING.save_best_by_train_loss
+    )
+    config.EFES_V3_THEORY.LOGGING.log_diag_metrics = _to_bool(
+        config.EFES_V3_THEORY.LOGGING.log_diag_metrics
+    )
 
 
 def get_config(

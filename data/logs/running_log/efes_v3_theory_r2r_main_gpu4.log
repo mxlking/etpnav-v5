@@ -1,0 +1,217 @@
+nohup: ignoring input
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+2026-04-13 14:52:57,854 Runtime log file: data/logs/running_log/efes_v3_theory_r2r_main_gpu4_train.log
+2026-04-13 14:52:59,814 Initializing dataset VLN-CE-v1
+2026-04-13 14:53:00,711 SPLTI: train, NUMBER OF SCENES: 61
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+/home/D/liumeng/miniconda3/envs/navmorph_try/lib/python3.9/site-packages/torch/functional.py:554: UserWarning: torch.meshgrid: in an upcoming release, it will be required to pass the indexing argument. (Triggered internally at /pytorch/aten/src/ATen/native/TensorShape.cpp:4322.)
+  return _VF.meshgrid(tensors, **kwargs)  # type: ignore[attr-defined]
+2026-04-13 14:53:21,096 Initializing dataset VLN-CE-v1
+[make_env_fn] seed= 107 UPPER_GPU= 0
+[runtime_cfg] UPPER_GPU= 0 lower_gpu= 0
+2026-04-13 14:53:23,506 initializing sim Sim-v0
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+[14:53:24:118463]:[Warning]:[Metadata] SceneDatasetAttributes.cpp(107)::addNewSceneInstanceToDataset : Dataset : 'default' : Lighting Layout Attributes 'no_lights' specified in Scene Attributes but does not exist in dataset, so creating default.
+2026-04-13 14:53:26,531 Initializing dataset VLN-CE-v1
+2026-04-13 14:53:27,179 Initializing dataset VLN-CE-v1
+[make_env_fn] seed= 104 UPPER_GPU= 0
+2026-04-13 14:53:27,918 Initializing dataset VLN-CE-v1
+[runtime_cfg] UPPER_GPU= 0 lower_gpu= 0
+2026-04-13 14:53:28,534 initializing sim Sim-v0
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+[make_env_fn] seed= 102 UPPER_GPU= 0
+2026-04-13 14:53:28,708 Initializing dataset VLN-CE-v1
+2026-04-13 14:53:28,712 Initializing dataset VLN-CE-v1
+2026-04-13 14:53:28,724 Initializing dataset VLN-CE-v1
+2026-04-13 14:53:28,820 Initializing dataset VLN-CE-v1
+[make_env_fn] seed= 105 UPPER_GPU= 0
+[14:53:29:121347]:[Warning]:[Metadata] SceneDatasetAttributes.cpp(107)::addNewSceneInstanceToDataset : Dataset : 'default' : Lighting Layout Attributes 'no_lights' specified in Scene Attributes but does not exist in dataset, so creating default.
+[runtime_cfg] UPPER_GPU= 0 lower_gpu= 0
+2026-04-13 14:53:29,208 initializing sim Sim-v0
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+[make_env_fn] seed= 106 UPPER_GPU= 0
+[runtime_cfg] UPPER_GPU= 0 lower_gpu= 0
+2026-04-13 14:53:29,591 initializing sim Sim-v0
+[make_env_fn] seed= 101 UPPER_GPU= 0
+[make_env_fn] seed= 100 UPPER_GPU= 0
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+[make_env_fn] seed= 103 UPPER_GPU= 0
+[runtime_cfg] UPPER_GPU= 0 lower_gpu= 0
+2026-04-13 14:53:30,209 initializing sim Sim-v0
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+[runtime_cfg] UPPER_GPU= 0 lower_gpu= 0
+2026-04-13 14:53:30,264 initializing sim Sim-v0
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+[runtime_cfg] UPPER_GPU= 0 lower_gpu= 0
+[runtime_cfg] UPPER_GPU= 0 lower_gpu= 0
+2026-04-13 14:53:30,338 initializing sim Sim-v0
+2026-04-13 14:53:30,340 initializing sim Sim-v0
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin StbImageImporter, ignoring
+PluginManager::Manager: duplicate static plugin GltfImporter, ignoring
+PluginManager::Manager: duplicate static plugin BasisImporter, ignoring
+PluginManager::Manager: duplicate static plugin AssimpImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnySceneImporter, ignoring
+PluginManager::Manager: duplicate static plugin AnyImageImporter, ignoring
+[14:53:30:721539]:[Warning]:[Metadata] SceneDatasetAttributes.cpp(107)::addNewSceneInstanceToDataset : Dataset : 'default' : Lighting Layout Attributes 'no_lights' specified in Scene Attributes but does not exist in dataset, so creating default.
+[14:53:30:995811]:[Warning]:[Metadata] SceneDatasetAttributes.cpp(107)::addNewSceneInstanceToDataset : Dataset : 'default' : Lighting Layout Attributes 'no_lights' specified in Scene Attributes but does not exist in dataset, so creating default.
+[14:53:32:691652]:[Warning]:[Metadata] SceneDatasetAttributes.cpp(107)::addNewSceneInstanceToDataset : Dataset : 'default' : Lighting Layout Attributes 'no_lights' specified in Scene Attributes but does not exist in dataset, so creating default.
+[14:53:32:740951]:[Warning]:[Metadata] SceneDatasetAttributes.cpp(107)::addNewSceneInstanceToDataset : Dataset : 'default' : Lighting Layout Attributes 'no_lights' specified in Scene Attributes but does not exist in dataset, so creating default.
+[14:53:32:761893]:[Warning]:[Metadata] SceneDatasetAttributes.cpp(107)::addNewSceneInstanceToDataset : Dataset : 'default' : Lighting Layout Attributes 'no_lights' specified in Scene Attributes but does not exist in dataset, so creating default.
+[14:53:32:830076]:[Warning]:[Metadata] SceneDatasetAttributes.cpp(107)::addNewSceneInstanceToDataset : Dataset : 'default' : Lighting Layout Attributes 'no_lights' specified in Scene Attributes but does not exist in dataset, so creating default.
+2026-04-13 14:53:33,269 Initializing task VLN-v0
+2026-04-13 14:53:41,216 Initializing task VLN-v0
+2026-04-13 14:53:45,216 Initializing task VLN-v0
+2026-04-13 14:53:50,337 Initializing task VLN-v0
+2026-04-13 14:53:54,635 Initializing task VLN-v0
+2026-04-13 14:54:02,201 Initializing task VLN-v0
+2026-04-13 14:54:05,426 Initializing task VLN-v0
+2026-04-13 14:54:29,029 Initializing task VLN-v0
+2026-04-13 14:54:29,412 LOCAL RANK: 0, ENV NUM: 8, DATASET LEN: 10819
+You are using a model of type bert to instantiate a model of type . This is not supported for all configurations of models and can yield errors.
+2026-04-13 14:54:34,787 Agent parameters: 299.14 MB. Trainable: 140.79 MB.
+2026-04-13 14:54:34,787 Finished setting up policy.
+2026-04-13 14:54:35,910 [EFES CKPT train] path=data/logs/checkpoints/release_r2r/ckpt.iter12000.pth type=bootstrap-only has_statenav_state=False iteration=12000 contract=None phase=None optim=True
+2026-04-13 14:54:36,101 Loaded bootstrap-only ETPNav checkpoint for EFESV3Theory training: data/logs/checkpoints/release_r2r/ckpt.iter12000.pth.
+2026-04-13 14:54:36,154 ========== StateNav Trainability Summary ==========
+2026-04-13 14:54:36,155 [ETP.policy] status=frozen | trainable=0 (0.00M) | frozen=299,141,092 (299.14M) | total=299,141,092 (299.14M)
+2026-04-13 14:54:36,155 [StateNav.agent] status=trainable | trainable=18,580,547 (18.58M) | frozen=0 (0.00M) | total=18,580,547 (18.58M)
+2026-04-13 14:54:36,155 [optimizer] group=0 lr=0.0001 tensors=73 | trainable=18,580,547 (18.58M) | total=18,580,547 (18.58M)
+2026-04-13 14:54:36,155 [optimizer] unique tensors=73 | trainable=18,580,547 (18.58M) | total=18,580,547 (18.58M)
+2026-04-13 14:54:36,155 Full model report saved to data/logs/checkpoints/efes_v3_theory_r2r_main_gpu4/EFESV3TheoryTrainer_model_report.txt
+2026-04-13 14:54:36,155 ===================================================
+2026-04-13 14:54:36,156 Step metrics will be written to data/logs/checkpoints/efes_v3_theory_r2r_main_gpu4/step_metrics.tsv
+2026-04-13 14:54:36,156 EFESV3Theory training starts...
+2026-04-13 15:01:13,664 [EFESV3Theory v3-theory action=corrected 000010/015000 | interval 010/200] total=625.1824 nav=0.4811 fe=624.2289 cal=0.4695 safe=0.0000 mi=0.2869 grad=397.4865 | u=65.782 u~=-4.792 kl=8.399 nll=615.830 recon=177.164 sigma=0.703 gate=0.127 lambda=0.127 auc=0.486 tp=0.000 fp=0.000 | sec(step=28.77 roll=28.54 bw=0.23 opt=0.00 nav=0.15 theory=0.05 env=6.99)
+2026-04-13 15:09:06,192 [EFESV3Theory v3-theory action=corrected 000020/015000 | interval 020/200] total=629.0893 nav=0.6112 fe=627.9402 cal=0.5375 safe=0.0000 mi=0.0402 grad=384.6733 | u=66.240 u~=-4.334 kl=8.615 nll=619.325 recon=180.130 sigma=0.702 gate=0.127 lambda=0.127 auc=0.383 tp=0.000 fp=0.000 | sec(step=52.96 roll=52.83 bw=0.13 opt=0.00 nav=0.37 theory=0.09 env=17.72)
+2026-04-13 15:17:16,806 [EFESV3Theory v3-theory action=corrected 000030/015000 | interval 030/200] total=632.6655 nav=0.3600 fe=631.9393 cal=0.3645 safe=0.0000 mi=0.1754 grad=405.6716 | u=66.659 u~=-3.916 kl=8.662 nll=623.277 recon=183.367 sigma=0.703 gate=0.127 lambda=0.127 auc=0.604 tp=0.000 fp=0.000 | sec(step=41.00 roll=40.88 bw=0.12 opt=0.00 nav=0.37 theory=0.09 env=11.26)

@@ -31,6 +31,8 @@ achieves [AUC] ROC-AUC for detecting base-policy error and gate activation remai
 selective. These results support an operational view of self-awareness in embodied navigation:
 an agent need not receive explicit failure labels to diagnose off-manifold departure, because
 predictive inconsistency within the sensorimotor loop is the *tightest possible* endogenous signal.
+Empirically, we evaluate the variational gate interpretation through selectivity diagnostics and
+report an MI proxy rather than claiming a direct end-to-end verification of the ergodic theorem.
 
 ---
 
@@ -509,6 +511,13 @@ $$
 **Critical:** $\mathcal{L}_{\text{cal}}$ target is *base-policy error*, not corrected-policy error.
 This aligns the gate's learning signal with Theorem 5 (gate = Lagrange multiplier for base-policy
 unreliability) and Theorem 6 (selective gain requires $\alpha$ to measure gate sensitivity to $E_t$).
+
+**Optimization implementation note.** The paper-level theoretical objects remain the raw quantities
+above. In code, optimization may use equivalent training proxies while preserving the same semantics:
+`L_fe_opt` is a dimension-normalized version of $\mathcal{L}_{\text{fe}}$, and `L_cal_opt` uses
+`BCEWithLogits` on the pre-sigmoid gate logit with class balancing. We still log the raw quantities
+(`L_fe_raw`, `L_cal_raw`) for theorem-aligned analysis and keep the optimization proxies as an
+implementation detail for stability.
 
 ---
 

@@ -14,6 +14,7 @@ class TheoryCorrector(nn.Module):
         hidden_dim: int = 256,
         delta_bound: float = 1.0,
         gate_bias: float = -2.0,
+        gate_logit_init_std: float = 0.02,
         lambda_scale: float = 1.0,
         use_dual_gate: bool = True,
         use_shifted_surprise: bool = True,
@@ -36,7 +37,7 @@ class TheoryCorrector(nn.Module):
             nn.GELU(),
             nn.Linear(64, 1),
         )
-        nn.init.zeros_(self.gate_net[-1].weight)
+        nn.init.normal_(self.gate_net[-1].weight, mean=0.0, std=float(gate_logit_init_std))
         nn.init.constant_(self.gate_net[-1].bias, float(gate_bias))
 
     def forward(
@@ -53,18 +54,20 @@ class TheoryCorrector(nn.Module):
         delta = torch.tanh(self.delta_head(hidden).squeeze(-1)) * self.delta_bound
 
         gate_raw = self.gate_net(u_signal.unsqueeze(-1)).squeeze(-1)
+        gate = torch.sigmoid(gate_raw)
         if self.use_dual_gate:
             lambda_hat = torch.nn.functional.softplus(gate_raw)
-            gate = torch.clamp(lambda_hat / self.lambda_scale, min=0.0, max=1.0)
         else:
-            lambda_hat = torch.nn.functional.softplus(gate_raw)
-            gate = torch.sigmoid(gate_raw)
+            lambda_hat = gate
+        alarm_prob = gate
 
         corrected = etp_logits + gate.unsqueeze(-1) * delta
         corrected = corrected.masked_fill(cand_mask, -1.0e4)
         return {
             "corrected_logits": corrected,
             "gate": gate,
+            "gate_raw": gate_raw,
+            "alarm_prob": alarm_prob,
             "lambda_hat": lambda_hat,
             "delta": delta,
             "delta_abs_max": delta.detach().abs().amax(dim=-1),

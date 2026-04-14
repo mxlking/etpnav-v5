@@ -92,6 +92,7 @@ EFES_V3_THEORY:
   grad_clip_norm: 5.0
   max_keep_checkpoints: 3
   gate_bias: -2.0
+  gate_logit_init_std: 0.02
   delta_bound: 1.0
   lambda_scale: 1.0
   gate_threshold: 0.5

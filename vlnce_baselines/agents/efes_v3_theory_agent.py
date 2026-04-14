@@ -31,6 +31,7 @@ class EFESV3TheoryAgent(nn.Module):
         gate_bias: float = -2.0,
         delta_bound: float = 1.0,
         lambda_scale: float = 1.0,
+        gate_logit_init_std: float = 0.02,
         use_body_loop: bool = True,
         use_predictor: bool = True,
         use_corrector: bool = True,
@@ -77,6 +78,7 @@ class EFESV3TheoryAgent(nn.Module):
             cand_dim=self.cand_dim,
             delta_bound=float(delta_bound),
             gate_bias=float(gate_bias),
+            gate_logit_init_std=float(gate_logit_init_std),
             lambda_scale=float(lambda_scale),
             use_dual_gate=bool(use_dual_gate),
             use_shifted_surprise=bool(use_shifted_surprise),
@@ -108,6 +110,7 @@ class EFESV3TheoryAgent(nn.Module):
             gate_bias=float(efes_cfg.gate_bias),
             delta_bound=float(efes_cfg.delta_bound),
             lambda_scale=float(efes_cfg.lambda_scale),
+            gate_logit_init_std=float(getattr(efes_cfg, "gate_logit_init_std", 0.02)),
             use_body_loop=bool(getattr(efes_cfg, "use_body_loop", True)),
             use_predictor=bool(getattr(efes_cfg, "use_predictor", True)),
             use_corrector=bool(getattr(efes_cfg, "use_corrector", True)),
@@ -234,12 +237,16 @@ class EFESV3TheoryAgent(nn.Module):
             )
             corrected_logits = corr["corrected_logits"]
             gate = corr["gate"]
+            gate_raw = corr["gate_raw"]
+            alarm_prob = corr["alarm_prob"]
             delta = corr["delta"]
             lambda_hat = corr["lambda_hat"]
             delta_abs_max = corr["delta_abs_max"]
         else:
             corrected_logits = etp_candidate_scores.masked_fill(candidate_mask, -1.0e4)
             gate = torch.zeros(batch_size, device=self_t.device, dtype=self_t.dtype)
+            gate_raw = torch.zeros(batch_size, device=self_t.device, dtype=self_t.dtype)
+            alarm_prob = torch.zeros(batch_size, device=self_t.device, dtype=self_t.dtype)
             delta = torch.zeros_like(etp_candidate_scores)
             lambda_hat = torch.zeros(batch_size, device=self_t.device, dtype=self_t.dtype)
             delta_abs_max = torch.zeros(batch_size, device=self_t.device, dtype=self_t.dtype)
@@ -251,6 +258,8 @@ class EFESV3TheoryAgent(nn.Module):
         return {
             "corrected_logits": corrected_logits,
             "gate": gate,
+            "gate_raw": gate_raw,
+            "alarm_prob": alarm_prob,
             "lambda_hat": lambda_hat,
             "delta": delta,
             "delta_abs_max": delta_abs_max,

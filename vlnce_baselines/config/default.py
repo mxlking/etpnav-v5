@@ -541,6 +541,7 @@ _C.EFES_V3_THEORY.mi_temperature = 0.1
 _C.EFES_V3_THEORY.grad_clip_norm = 5.0
 _C.EFES_V3_THEORY.max_keep_checkpoints = 3
 _C.EFES_V3_THEORY.gate_bias = -2.0
+_C.EFES_V3_THEORY.gate_logit_init_std = 0.02
 _C.EFES_V3_THEORY.delta_bound = 1.0
 _C.EFES_V3_THEORY.lambda_scale = 1.0
 _C.EFES_V3_THEORY.action_source = "corrected"
@@ -1020,6 +1021,7 @@ def coerce_legacy_scalar_types(config: CN) -> None:
     config.EFES_V3_THEORY.grad_clip_norm = float(config.EFES_V3_THEORY.grad_clip_norm)
     config.EFES_V3_THEORY.max_keep_checkpoints = int(config.EFES_V3_THEORY.max_keep_checkpoints)
     config.EFES_V3_THEORY.gate_bias = float(config.EFES_V3_THEORY.gate_bias)
+    config.EFES_V3_THEORY.gate_logit_init_std = float(getattr(config.EFES_V3_THEORY, "gate_logit_init_std", 0.02))
     config.EFES_V3_THEORY.delta_bound = float(config.EFES_V3_THEORY.delta_bound)
     config.EFES_V3_THEORY.lambda_scale = float(config.EFES_V3_THEORY.lambda_scale)
     config.EFES_V3_THEORY.gate_threshold = float(config.EFES_V3_THEORY.gate_threshold)

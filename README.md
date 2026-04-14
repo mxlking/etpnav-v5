@@ -148,6 +148,59 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 bash run_rxr/main.bash eval  2333  # evaluation
 CUDA_VISIBLE_DEVICES=0,1,2,3 bash run_rxr/main.bash infer 2333  # inference
 ```
 
+## EFESV3Theory
+
+This repository also includes the `EFESV3Theory` training, evaluation and inference path built on top of the frozen ETPNav backbone. It uses the same environment setup described above and adds new entrypoints under `run_r2r/efes_v3_theory/`.
+
+Recommended runtime assumptions:
+
+1. Use the environment created from `environment.yaml`.
+2. Install Habitat Lab / Habitat Sim `v0.1.7` as described in `Setup`.
+3. Make sure the ETPNav release checkpoint exists at `data/logs/checkpoints/release_r2r/ckpt.iter12000.pth`.
+
+Example commands:
+
+```bash
+# train
+CUDA_VISIBLE_DEVICES=0 \
+PER_GPU_ENVS=8 \
+TRAIN_ENVS_PER_RANK=8 \
+PYTHON_BIN=$(which python) \
+USE_TQDM=False \
+STEP_LOG_EVERY=10 \
+IL_LOG_EVERY=200 \
+bash run_r2r/efes_v3_theory/efes_v3_theory.bash main train 29690 efes_v3_theory_r2r_main
+
+# evaluate a checkpoint on val_unseen
+CUDA_VISIBLE_DEVICES=0 \
+PER_GPU_ENVS=4 \
+EVAL_ENVS_PER_RANK=4 \
+PYTHON_BIN=$(which python) \
+USE_TQDM=False \
+STEP_LOG_EVERY=10 \
+bash run_r2r/efes_v3_theory/efes_v3_theory.bash main eval 29691 efes_v3_theory_eval \
+  data/logs/checkpoints/efes_v3_theory_r2r_main/ckpt.iter400.pth
+
+# inference
+CUDA_VISIBLE_DEVICES=0 \
+PER_GPU_ENVS=4 \
+EVAL_ENVS_PER_RANK=4 \
+PYTHON_BIN=$(which python) \
+USE_TQDM=False \
+STEP_LOG_EVERY=10 \
+bash run_r2r/efes_v3_theory/efes_v3_theory.bash main infer 29692 efes_v3_theory_infer \
+  data/logs/checkpoints/efes_v3_theory_r2r_main/ckpt.iter400.pth preds_efes_v3_theory.json
+```
+
+The main theory-aligned files are:
+
+* `run_r2r/efes_v3_theory/efes_v3_theory.bash`
+* `run_r2r/efes_v3_theory/efes_v3_theory_main.yaml`
+* `vlnce_baselines/agents/efes_v3_theory_agent.py`
+* `vlnce_baselines/models/efes_v3_theory/`
+* `vlnce_baselines/trainers/train_efes_v3_theory.py`
+* `docs/last/EFES_FINAL_PAPER.md`
+
 # Contact Information
 
 * dong DOT an AT cripac DOT ia DOT ac DOT cn, [Dong An](https://marsaki.github.io/)

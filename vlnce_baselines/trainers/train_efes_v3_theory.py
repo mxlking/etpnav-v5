@@ -258,8 +258,10 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
             "grad_norm",
             "total_loss",
             "nav_loss",
-            "fe_loss",
-            "calibrate_loss",
+            "fe_loss_opt",
+            "fe_loss_raw",
+            "calibrate_loss_opt",
+            "calibrate_loss_raw",
             "safe_loss",
             "mi_loss",
             "kl_micro_mean",
@@ -310,7 +312,7 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
         if int(record["iteration"]) % step_log_every != 0:
             return
         logger.info(
-            "[EFESV3Theory %s action=%s %06d/%06d | interval %03d/%03d] total=%.4f nav=%.4f fe=%.4f cal=%.4f safe=%.4f mi=%.4f grad=%.4f"
+            "[EFESV3Theory %s action=%s %06d/%06d | interval %03d/%03d] total=%.4f nav=%.4f fe_opt=%.4f(raw=%.4f) cal_opt=%.4f(raw=%.4f) safe=%.4f mi=%.4f grad=%.4f"
             " | u=%.3f u~=%.3f kl=%.3f nll=%.3f recon=%.3f sigma=%.3f gate=%.3f lambda=%.3f auc=%.3f tp=%.3f fp=%.3f"
             " | sec(step=%.2f roll=%.2f bw=%.2f opt=%.2f nav=%.2f theory=%.2f env=%.2f)",
             str(record.get("contract_version", self.contract_version)),
@@ -321,8 +323,10 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
             int(record.get("interval_size", 0)),
             float(record.get("total_loss", 0.0)),
             float(record.get("nav_loss", 0.0)),
-            float(record.get("fe_loss", 0.0)),
-            float(record.get("calibrate_loss", 0.0)),
+            float(record.get("fe_loss_opt", 0.0)),
+            float(record.get("fe_loss_raw", 0.0)),
+            float(record.get("calibrate_loss_opt", 0.0)),
+            float(record.get("calibrate_loss_raw", 0.0)),
             float(record.get("safe_loss", 0.0)),
             float(record.get("mi_loss", 0.0)),
             float(record.get("grad_norm", 0.0)),
@@ -505,7 +509,9 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
 
         nav_loss_sum = torch.zeros((), device=self.device)
         fe_loss_sum = torch.zeros((), device=self.device)
+        fe_loss_raw_sum = torch.zeros((), device=self.device)
         calibrate_loss_sum = torch.zeros((), device=self.device)
+        calibrate_loss_raw_sum = torch.zeros((), device=self.device)
         safe_loss_sum = torch.zeros((), device=self.device)
         mi_loss_sum = torch.zeros((), device=self.device)
 
@@ -685,23 +691,39 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
                 node_feat=step_outs["compressed_node_feat"],
             )
 
-            gate_sum = gate_sum + step_outs["gate"].sum()
-            gate_p90_sum = gate_p90_sum + torch.quantile(step_outs["gate"].detach(), 0.9)
+            gate_det = step_outs["gate"].detach().float()
+            lambda_hat_det = step_outs["lambda_hat"].detach().float()
+            delta_abs_max_det = step_outs["delta_abs_max"].detach().float()
+            u_raw_det = step_outs["u_t_raw"].detach().float()
+            u_tilde_det = step_outs["u_tilde"].detach().float()
+            kl_micro_det = step_outs["kl_micro"].detach().float()
+            nll_macro_det = step_outs["nll_macro"].detach().float()
+            recon_sq_error_det = step_outs["recon_sq_error"].detach().float()
+            sigma_mean_det = step_outs["sigma_mean"].detach().float()
+            sigma_low_det = step_outs["sigma_hit_low_rate"].detach().float()
+            sigma_high_det = step_outs["sigma_hit_high_rate"].detach().float()
+            progress_det = step_outs["progress_t"].detach().float()
+            score_before_det = step_outs["score_before_mean"].detach().float()
+            score_after_det = step_outs["score_after_mean"].detach().float()
+            kl_corrected_vs_base_det = step_outs["kl_corrected_vs_base"].detach().float()
+
+            gate_sum = gate_sum + gate_det.sum()
+            gate_p90_sum = gate_p90_sum + torch.quantile(gate_det, 0.9)
             gate_p90_count = gate_p90_count + 1.0
-            lambda_hat_sum = lambda_hat_sum + step_outs["lambda_hat"].sum()
-            delta_abs_max_sum = delta_abs_max_sum + step_outs["delta_abs_max"].sum()
-            u_raw_sum = u_raw_sum + step_outs["u_t_raw"].sum()
-            u_tilde_sum = u_tilde_sum + step_outs["u_tilde"].sum()
-            kl_micro_sum = kl_micro_sum + step_outs["kl_micro"].sum()
-            nll_macro_sum = nll_macro_sum + step_outs["nll_macro"].sum()
-            recon_sq_error_sum = recon_sq_error_sum + step_outs["recon_sq_error"].sum()
-            sigma_mean_sum = sigma_mean_sum + step_outs["sigma_mean"].sum()
-            sigma_low_sum = sigma_low_sum + step_outs["sigma_hit_low_rate"].sum()
-            sigma_high_sum = sigma_high_sum + step_outs["sigma_hit_high_rate"].sum()
-            progress_sum = progress_sum + step_outs["progress_t"].sum()
-            score_before_sum = score_before_sum + step_outs["score_before_mean"].sum()
-            score_after_sum = score_after_sum + step_outs["score_after_mean"].sum()
-            kl_corrected_vs_base_sum = kl_corrected_vs_base_sum + step_outs["kl_corrected_vs_base"].sum()
+            lambda_hat_sum = lambda_hat_sum + lambda_hat_det.sum()
+            delta_abs_max_sum = delta_abs_max_sum + delta_abs_max_det.sum()
+            u_raw_sum = u_raw_sum + u_raw_det.sum()
+            u_tilde_sum = u_tilde_sum + u_tilde_det.sum()
+            kl_micro_sum = kl_micro_sum + kl_micro_det.sum()
+            nll_macro_sum = nll_macro_sum + nll_macro_det.sum()
+            recon_sq_error_sum = recon_sq_error_sum + recon_sq_error_det.sum()
+            sigma_mean_sum = sigma_mean_sum + sigma_mean_det.sum()
+            sigma_low_sum = sigma_low_sum + sigma_low_det.sum()
+            sigma_high_sum = sigma_high_sum + sigma_high_det.sum()
+            progress_sum = progress_sum + progress_det.sum()
+            score_before_sum = score_before_sum + score_before_det.sum()
+            score_after_sum = score_after_sum + score_after_det.sum()
+            kl_corrected_vs_base_sum = kl_corrected_vs_base_sum + kl_corrected_vs_base_det.sum()
             topo_update_sum = topo_update_sum + topo_update_mask.to(dtype=avg_pano_embeds.dtype).sum()
 
             if mode == "eval" and active_eval_diag is not None:
@@ -735,8 +757,11 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
                     reduction="sum",
                 )
 
-                fe_step = step_outs["loss_micro"] + float(getattr(self._efes_cfg(), "lambda_macro", 1.0)) * step_outs["loss_macro"]
-                fe_loss_sum = fe_loss_sum + fe_step.sum()
+                fe_step_raw = step_outs["loss_micro"] + float(getattr(self._efes_cfg(), "lambda_macro", 1.0)) * step_outs["loss_macro"]
+                fe_loss_raw_sum = fe_loss_raw_sum + fe_step_raw.sum()
+                feat_dim = max(int(step_outs["compressed_node_feat"].size(-1)), 1)
+                fe_step_opt = fe_step_raw / float(feat_dim)
+                fe_loss_sum = fe_loss_sum + fe_step_opt.sum()
 
                 teacher_valid = teacher_actions.ge(0)
                 masked_base = nav_logits.masked_fill(invalid_candidate_mask, -1.0e4)
@@ -744,14 +769,36 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
                 error_target = (teacher_valid & base_choice.ne(teacher_actions)).to(dtype=avg_pano_embeds.dtype)
                 base_error_sum = base_error_sum + error_target.sum()
 
-                gate_or_alarm = step_outs["gate"].float().clamp(1e-4, 1.0 - 1e-4)
+                gate_or_alarm = step_outs["gate"].float().clamp(1e-4, 1.0 - 1.0e-4)
                 with cuda_autocast(enabled=False):
-                    calib = F.binary_cross_entropy(
+                    calib_raw = F.binary_cross_entropy(
                         gate_or_alarm.float(),
                         error_target.float(),
                         reduction="none",
                     )
-                calibrate_loss_sum = calibrate_loss_sum + (calib * teacher_valid.to(dtype=calib.dtype)).sum()
+                calibrate_loss_raw_sum = calibrate_loss_raw_sum + (
+                    calib_raw * teacher_valid.to(dtype=calib_raw.dtype)
+                ).sum()
+
+                valid_count = int(teacher_valid.sum().item())
+                if valid_count > 0:
+                    gate_logits = step_outs["gate_raw"][teacher_valid].float()
+                    target_valid = error_target[teacher_valid].float()
+                    pos_count = float(target_valid.sum().item())
+                    neg_count = float(valid_count) - pos_count
+                    if pos_count > 0.0:
+                        pos_weight_value = min(max(neg_count / max(pos_count, 1.0), 1.0), 8.0)
+                    else:
+                        pos_weight_value = 1.0
+                    pos_weight = gate_logits.new_tensor(pos_weight_value)
+                    with cuda_autocast(enabled=False):
+                        calib_opt = F.binary_cross_entropy_with_logits(
+                            gate_logits,
+                            target_valid,
+                            pos_weight=pos_weight,
+                            reduction="sum",
+                        )
+                    calibrate_loss_sum = calibrate_loss_sum + calib_opt
 
                 if bool(getattr(self._efes_cfg(), "use_safe_kl", True)):
                     safe_loss_sum = safe_loss_sum + step_outs["kl_corrected_vs_base"].sum()
@@ -1001,14 +1048,16 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
         if mode == "train":
             total_actions_f = max(float(total_actions), 1.0)
             nav_loss = nav_loss_sum / total_actions_f
-            fe_loss = fe_loss_sum / total_actions_f
-            calibrate_loss = calibrate_loss_sum / total_actions_f
+            fe_loss_opt = fe_loss_sum / total_actions_f
+            fe_loss_raw = fe_loss_raw_sum / total_actions_f
+            calibrate_loss_opt = calibrate_loss_sum / total_actions_f
+            calibrate_loss_raw = calibrate_loss_raw_sum / total_actions_f
             safe_loss = safe_loss_sum / total_actions_f
             mi_loss = mi_loss_sum / total_actions_f
             total_loss = (
                 nav_loss
-                + float(getattr(self._efes_cfg(), "lambda_fe", 1.0)) * fe_loss
-                + float(getattr(self._efes_cfg(), "lambda_cal", 1.0)) * calibrate_loss
+                + float(getattr(self._efes_cfg(), "lambda_fe", 1.0)) * fe_loss_opt
+                + float(getattr(self._efes_cfg(), "lambda_cal", 1.0)) * calibrate_loss_opt
                 + (float(getattr(self._efes_cfg(), "lambda_safe", 0.0)) * safe_loss if bool(getattr(self._efes_cfg(), "use_safe_kl", True)) else 0.0)
                 + (float(getattr(self._efes_cfg(), "lambda_mi", 0.0)) * mi_loss if bool(getattr(self._efes_cfg(), "use_mi_proxy", True)) else 0.0)
             )
@@ -1017,8 +1066,10 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
             scalar_metrics = {
                 "total_loss": float(total_loss.detach().item()),
                 "nav_loss": float(nav_loss.detach().item()),
-                "fe_loss": float(fe_loss.detach().item()),
-                "calibrate_loss": float(calibrate_loss.detach().item()),
+                "fe_loss_opt": float(fe_loss_opt.detach().item()),
+                "fe_loss_raw": float(fe_loss_raw.detach().item()),
+                "calibrate_loss_opt": float(calibrate_loss_opt.detach().item()),
+                "calibrate_loss_raw": float(calibrate_loss_raw.detach().item()),
                 "safe_loss": float(safe_loss.detach().item()),
                 "mi_loss": float(mi_loss.detach().item()),
             }

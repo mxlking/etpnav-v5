@@ -111,7 +111,7 @@ u_t = alpha * L_micro + beta * L_macro.
 
 To separate geometry from the variance-dependent constant, we define shifted surprise
 
-u_t_tilde = u_t - beta * d / 2 * log(2 * pi * sigma_min^2).
+u_t_tilde = u_t - beta * d / 2 * log(2 * pi * sigma_max^2).
 
 This shifted quantity is what the gate, the analysis metrics, and the theorem statements use.
 
@@ -158,6 +158,19 @@ L_safe = KL(pi || pi_0).
 
 The calibration target is the base-policy error indicator rather than corrected-policy error. This makes the gate learn when the frozen backbone is unreliable, which aligns the learning signal with the theoretical role of selective intervention.
 
+Implementation note. The paper keeps the raw theoretical quantities
+
+L_fe_raw = L_micro + lambda_macro * L_macro,
+
+L_cal_raw = BCE(g_t, 1[argmax pi_0 != y_t]).
+
+For optimization stability, the code may use equivalent optimization proxies:
+
+- L_fe_opt: a dimension-normalized version of L_fe_raw
+- L_cal_opt: BCEWithLogits on gate_raw with class balancing
+
+These proxies do not replace the theoretical objects. Raw quantities are still logged and used for analysis, while optimization proxies are used only to stabilize training.
+
 ## 4. Theoretical Properties
 
 ### 4.1 Proposition 1: Variational Upper Bound on Surprisal
@@ -180,7 +193,7 @@ Interpretation. High free energy certifies low model evidence for the current ob
 
 Assume the macro decoder is diagonal Gaussian with sigma_i in [sigma_min, sigma_max]. Then
 
-- log p(x_t | c_t) >= 1 / (2 sigma_max^2) * ||x_t - mu_t||_2^2 + d / 2 * log(2 pi sigma_min^2).
+- log p(x_t | c_t) >= 1 / (2 sigma_max^2) * ||x_t - mu_t||_2^2 + d / 2 * log(2 pi sigma_max^2).
 
 Therefore the shifted surprise obeys
 
@@ -318,9 +331,9 @@ Because sigma_i <= sigma_max, the quadratic term is bounded below by
 
 1 / (2 sigma_max^2) * ||x_t - mu_t||_2^2.
 
-Because sigma_i >= sigma_min, the log term is bounded below by
+Because sigma_i <= sigma_max and the anomaly-regime argument places the minimum at sigma_max, the log term is bounded below by
 
-d / 2 * log(2 pi sigma_min^2).
+d / 2 * log(2 pi sigma_max^2).
 
 Adding the non-negative KL term and subtracting the constant shift yields the claim.
 

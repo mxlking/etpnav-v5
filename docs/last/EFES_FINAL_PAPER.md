@@ -18,19 +18,20 @@ evidence is high.
 Our main theoretical contribution is a *tight* characterization: we prove that the greatest lower
 bound (infimum) of the shifted free energy over all valid model configurations, in the anomaly regime,
 equals exactly the squared Euclidean distance from the current observation to the agent's
-**self-manifold** (Theorem 3), and that this infimum is *achieved*. This establishes free energy
-as the *canonical* endogenous diagnostic—no other scalar derivable from the same generative model
-achieves a tighter lower bound on off-manifold deviation. We further (i) derive the gate from first
-principles via KL-constrained policy optimization, where the gate equals the optimal Lagrange
-multiplier (Theorem 5); (ii) prove an ergodic self-consistency result connecting long-run free-energy
-minimization to maximum agent-environment mutual information (Theorem 7); and (iii) establish a
-selective intervention gain lower bound (Theorem 6).
+**self-manifold** (Theorem 3), and that this infimum is *achieved*. This establishes shifted free
+energy as a canonical endogenous diagnostic in the predictive-manifold sense. We further (i) derive
+a KL-constrained variational interpretation of gated correction (Theorem 5), implemented in code via
+a monotone gate parameterization; (ii) present a long-run mutual-information interpretation of
+free-energy minimization (Theorem 7), while empirically reporting only an MI proxy rather than a
+direct end-to-end theorem verification; and (iii) establish a selective intervention gain lower
+bound (Theorem 6).
 
 On R2R-CE val_unseen, EFES improves frozen ETPNav by [ΔSR] SR and [ΔSPL] SPL, while surprise
 achieves [AUC] ROC-AUC for detecting base-policy error and gate activation remains sparse and
 selective. These results support an operational view of self-awareness in embodied navigation:
 an agent need not receive explicit failure labels to diagnose off-manifold departure, because
-predictive inconsistency within the sensorimotor loop is the *tightest possible* endogenous signal.
+predictive inconsistency within the sensorimotor loop provides an endogenous signal of predictive
+breakdown.
 Empirically, we evaluate the variational gate interpretation through selectivity diagnostics and
 report an MI proxy rather than claiming a direct end-to-end verification of the ergodic theorem.
 
@@ -63,7 +64,7 @@ of this mismatch, or is it merely one surrogate among infinitely many?
 We answer affirmatively. Our central result (Theorem 3) establishes that the infimum of shifted
 free energy over all valid model configurations equals exactly the squared distance from the current
 observation to the agent's **self-manifold** in the anomaly regime, and that this infimum is
-achieved. This gives free energy a *uniqueness* property: it is the canonical endogenous diagnostic.
+achieved. This gives shifted free energy a canonical role in the predictive-manifold view adopted here.
 
 **Operational definition of self-awareness.** Throughout this paper, "self-awareness" means
 precisely: *the ability of an embodied agent to internally estimate whether its current sensorimotor
@@ -72,15 +73,15 @@ selection accordingly.* We make no claim about phenomenology or subjective exper
 
 **Contributions:**
 
-1. We prove free energy is the *canonical* diagnostic for off-manifold departure: its infimum in
+1. We prove that shifted free energy has a tight anomaly-regime characterization: its infimum in
    the anomaly regime equals the squared manifold distance, and is achieved (Theorem 3, Corollary 1).
 
 2. We derive the gated correction from first principles as the solution to KL-constrained policy
-   optimization, where the gate equals the optimal Lagrange multiplier (Theorem 5).
+   optimization, and implement it through a monotone gate parameterization consistent with that
+   variational interpretation (Theorem 5).
 
-3. We prove an ergodic self-consistency theorem: long-run free-energy minimization equals
-   maximization of mutual information between the agent's predictive model and the environment
-   (Theorem 7)—the formal content of "self-awareness arising from material coupling."
+3. We present a long-run mutual-information interpretation of free-energy minimization (Theorem 7),
+   and empirically report an MI proxy rather than a direct end-to-end verification of that theorem.
 
 4. We present EFES, a plug-in architecture for frozen VLN-CE policies with six falsifiable diagnostics
    mapping each theorem to an empirical measurement.
@@ -103,9 +104,9 @@ maintaining an accurate generative model of the sensorimotor loop. The "self" is
 addition; it is the *structure* the predictive model must represent to produce consistent predictions.
 
 We adopt this view but restrict it to a precise operational scope, and add a new element: we prove
-that free energy is not merely *one* operationalization of this intuition, but the *unique canonical
-one*, in the sense that its infimum equals the geometric manifold distance (Theorem 3) and its
-long-run average equals the irreducible agent-environment mutual information (Theorem 7).
+that shifted free energy tightly characterizes off-manifold deviation in the anomaly regime
+(Theorem 3), while also giving a long-run information-theoretic interpretation of embodied
+predictive consistency (Theorem 7).
 
 ### 2.2 Notation
 
@@ -316,15 +317,17 @@ where $\lambda^*: \mathbb{R}_{\geq 0} \to \mathbb{R}_{\geq 0}$ is the optimal La
 monotone non-decreasing, with $\lambda^*(\tilde{u}_t) = 0$ when $\tilde{u}_t = 0$ (by complementary
 slackness).
 
-Setting $\lambda^*(\tilde{u}_t) \approx g_t = \sigma(\eta(\tilde{u}_t - \tau))$ and
-$r_t(a) \approx \delta_t(a)$ recovers the EFES corrected policy as the solution to this optimization.
+Setting $\lambda^*(\tilde{u}_t)$ to be represented by a monotone gate parameterization
+$g_t = \sigma(\eta(\tilde{u}_t - \tau))$ and taking $r_t(a) \approx \delta_t(a)$ recovers the EFES
+corrected policy used in the implementation.
 
 **Interpretation:**
-- The **gate $g_t$ is the Lagrange multiplier**: how much the agent pays in KL to satisfy the correction demand.
+- The current implementation uses **$g_t$ as the policy control variable**, while any auxiliary dual
+  quantity is treated as a diagnostic rather than as a separate action-selection variable.
 - **Low surprise** ($\tilde{u}_t \to 0$) $\Rightarrow$ constraint slack $\Rightarrow$ $g_t \to 0$ (pass-through).
 - **High surprise** ($\tilde{u}_t \gg \tau$) $\Rightarrow$ constraint binds $\Rightarrow$ $g_t \to 1$ (full correction).
-- The free-energy tightness of Theorem 3 is what makes this coupling principled: since $\tilde{u}_t$ is
-  the *tightest* measure of $d_t^2$, the Lagrange coupling is geometrically grounded. $\square$
+- The free-energy tightness of Theorem 3 is what makes this coupling principled: $\tilde{u}_t$
+  provides the geometric signal that drives the gate. $\square$
 
 ---
 
@@ -373,8 +376,8 @@ where the last step uses the data processing and chain rule identities. $\square
 **Corollary 2 (Minimum-Surprise Navigation = Maximum-Coupling Navigation).**
 Minimizing long-run average surprise $\bar{u}_T$ is equivalent to maximizing
 $I(X; Z \mid H, M)$—the mutual information between observations and the agent's
-latent predictive state. This is the *formal operationalization* of the claim that
-self-awareness arises from the material coupling between agent and environment:
+latent predictive state. In this paper we treat this as a long-run theoretical interpretation;
+empirically we report only an MI proxy:
 $$
 \text{self-awareness} \;\equiv\; \max_{s_t, z_t} I(X;\, Z \mid H, M).
 $$
@@ -392,13 +395,13 @@ informational representation of its own navigation trajectory.
 | **T3** | **Tight infimum** | **$\inf \tilde{u}_t = \frac{\beta}{2\sigma_{\max}^2}d_t^2$ (achieved)** | **New** |
 | **C1** | **On-manifold char.** | **$\tilde{u}_t = 0 \Leftrightarrow x_t \in \mathcal{M}_t$** | **New** |
 | T4 | Bounded intervention | $D_{\mathrm{KL}}(\pi\|\pi_0) \leq 2g_t B$ | Adapted |
-| **T5** | **Gate = Lagrange mult.** | **Gate is opt. sol. to KL-constrained policy optim.** | **New** |
+| **T5** | **KL-constrained gate interpretation** | **Gate follows a monotone parameterization consistent with the KL-constrained variational view.** | **New** |
 | T6 | Selective gain | $\mathbb{E}[\Delta\ell] \geq \Pr(E_t)\alpha m - \Pr(\neg E_t)\beta_{\text{fp}} c$ | Adapted |
 | **T7** | **Ergodic consistency** | **$\bar{u}_T \to H(X) - I(X;Z|H,M)$** | **New** |
 
-Four new theoretical results: T3, C1, T5, T7. These establish the canonical status of free energy
-as the endogenous diagnostic, justify the gate variationally, and connect the framework to
-agent-environment information theory.
+Four new theoretical results: T3, C1, T5, T7. These establish the predictive-manifold role of
+shifted free energy, justify the gate variationally, and connect the framework to a long-run
+information-theoretic interpretation.
 
 ---
 
@@ -509,15 +512,18 @@ $$
 $$
 
 **Critical:** $\mathcal{L}_{\text{cal}}$ target is *base-policy error*, not corrected-policy error.
-This aligns the gate's learning signal with Theorem 5 (gate = Lagrange multiplier for base-policy
-unreliability) and Theorem 6 (selective gain requires $\alpha$ to measure gate sensitivity to $E_t$).
+This aligns the gate's learning signal with the KL-constrained interpretation of Theorem 5 and with
+Theorem 6, where selective gain depends on gate sensitivity to $E_t$.
 
 **Optimization implementation note.** The paper-level theoretical objects remain the raw quantities
 above. In code, optimization may use equivalent training proxies while preserving the same semantics:
 `L_fe_opt` is a dimension-normalized version of $\mathcal{L}_{\text{fe}}$, and `L_cal_opt` uses
 `BCEWithLogits` on the pre-sigmoid gate logit with class balancing. We still log the raw quantities
 (`L_fe_raw`, `L_cal_raw`) for theorem-aligned analysis and keep the optimization proxies as an
-implementation detail for stability.
+implementation detail for stability. In the current implementation, the gate consumes shifted
+surprise as a semantic diagnostic input, and the code may separate this diagnostic path from the
+exact optimization path for stability without redefining the theorem objects. Any auxiliary dual
+quantity is logged separately as a diagnostic and does not replace the gate in action selection.
 
 ---
 
@@ -560,11 +566,11 @@ implementation detail for stability.
 | Diagnostic | Theorem | Expected Pattern | Stop Criterion |
 |-----------|---------|-----------------|----------------|
 | ROC-AUC of $\tilde{u}_t$ for base error | T6 | AUC ≥ 0.70 | < 0.65: core claim broken |
-| Gate sparsity (histogram of $g_t$) | T5 | Bimodal: mass near 0, spike at errors | Flat: T5 violated |
+| Gate sparsity (histogram of $g_t$) | T5 | Sparse and selective | Flat: gate not selective |
 | Intervention selectivity $\alpha/\beta_{\text{fp}}$ | T6 | Ratio > 3× | < 1: no net gain |
 | Teacher-margin shift $\Delta$margin | T5 | Increase on $E_t$, ≈0 on $\neg E_t$ | Symmetric: gate not selective |
 | KL deviation vs $g_t$ | T4 | $D_{\mathrm{KL}} \leq 2g_t B$ (linear) | Superlinear: bounded residual violated |
-| Episode $\bar{u}_T$ vs outcome | T7 | Low $\bar{u}_T \leftrightarrow$ high SR | No correlation: ergodic assumption broken |
+| Episode $\bar{u}_T$ vs outcome | T7 | Low $\bar{u}_T \leftrightarrow$ high SR | No correlation: long-run interpretation unsupported |
 
 ---
 
@@ -600,17 +606,17 @@ own model can explain the current observation—not generic predictive variance.
 We presented EFES, an embodied free-energy self-model equipping any frozen VLN-CE policy with
 operational self-awareness. Our central contributions are theoretical:
 
-1. **Tight infimum (Theorem 3):** Free energy is the canonical endogenous diagnostic—its infimum
-   over all valid model configurations equals the squared manifold distance in the anomaly regime,
-   and is achieved. No other scalar from the same generative model achieves a tighter bound.
+1. **Tight infimum (Theorem 3):** Shifted free energy has a tight anomaly-regime characterization:
+   its infimum over all valid model configurations equals the squared manifold distance in the
+   anomaly regime, and is achieved.
 
-2. **Gate as Lagrange multiplier (Theorem 5):** The gate arises naturally as the optimal Lagrange
-   multiplier for KL-constrained policy optimization coupled to the anomaly signal, giving a
-   variational—not heuristic—justification.
+2. **KL-constrained gate interpretation (Theorem 5):** The gate arises naturally from the
+   KL-constrained correction view, while the implementation uses a monotone gate parameterization
+   consistent with that interpretation.
 
-3. **Ergodic self-consistency (Theorem 7):** Long-run free-energy minimization equals maximization
-   of agent-environment mutual information. This is the formal operationalization of the intuition
-   that self-awareness emerges from material coupling.
+3. **Long-run information-theoretic interpretation (Theorem 7):** Long-run free-energy
+   minimization admits a mutual-information interpretation. In experiments we report only an MI
+   proxy, not a direct end-to-end verification of the theorem.
 
 These results translate directly into a three-part architecture (self-state, predictor, corrector)
 with code requirements derived from the theorems ($\sigma_{\max}$, bounded residual, shared mask,

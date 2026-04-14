@@ -483,6 +483,30 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
         batch = apply_obs_transforms_batch(batch, self.obs_transforms)
         batch = {k: v.clone() if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
 
+        if mode == "eval":
+            env_to_pause = [
+                i
+                for i, ep in enumerate(self.envs.current_episodes())
+                if ep.episode_id in self.stat_eps
+            ]
+            self.envs, batch = self._pause_envs(self.envs, batch, env_to_pause)
+            if self.envs.num_envs == 0:
+                return
+        if mode == "infer":
+            env_to_pause = [
+                i
+                for i, ep in enumerate(self.envs.current_episodes())
+                if ep.episode_id in self.path_eps
+            ]
+            self.envs, batch = self._pause_envs(self.envs, batch, env_to_pause)
+            if self.envs.num_envs == 0:
+                return
+            curr_eps = self.envs.current_episodes()
+            for i in range(self.envs.num_envs):
+                if self.config.MODEL.task_type == "rxr":
+                    ep_id = curr_eps[i].episode_id
+                    self.inst_ids[ep_id] = int(curr_eps[i].instruction.instruction_id)
+
         self.statenav_agent.train() if mode == "train" else self.statenav_agent.eval()
 
         lang_start = self._timing_now()
@@ -996,6 +1020,37 @@ class EFESV3TheoryTrainer(EFESV3Trainer):
                         evaluated_eps=evaluated_eps,
                         eval_total=eval_total,
                     )
+                    if self.pbar is not None:
+                        self.pbar.update()
+
+            if mode == "infer":
+                curr_eps = self.envs.current_episodes()
+                for i in range(self.envs.num_envs):
+                    if not dones[i]:
+                        continue
+                    info = infos[i]
+                    ep_id = curr_eps[i].episode_id
+                    self.path_eps[ep_id] = [
+                        {
+                            "position": info["position_infer"]["position"][0],
+                            "heading": info["position_infer"]["heading"][0],
+                            "stop": False,
+                        }
+                    ]
+                    for pos, heading in zip(
+                        info["position_infer"]["position"][1:],
+                        info["position_infer"]["heading"][1:],
+                    ):
+                        if pos != self.path_eps[ep_id][-1]["position"]:
+                            self.path_eps[ep_id].append(
+                                {
+                                    "position": pos,
+                                    "heading": heading,
+                                    "stop": False,
+                                }
+                            )
+                    self.path_eps[ep_id] = self.path_eps[ep_id][:500]
+                    self.path_eps[ep_id][-1]["stop"] = True
                     if self.pbar is not None:
                         self.pbar.update()
 

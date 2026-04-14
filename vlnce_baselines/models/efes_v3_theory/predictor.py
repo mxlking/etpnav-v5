@@ -111,18 +111,24 @@ class TheoryPredictor(nn.Module):
         kl = self._diag_kl(mu_post, std_post, mu_pri, std_pri)
 
         has_bank = bank_mask.any(dim=-1)
+        topo_ctx = self.retrieve_norm(s_t + self.null_memory.unsqueeze(0))
         if bank_feat.size(1) > 0 and bool(has_bank.any().item()):
-            bank_tokens = self.bank_proj(bank_feat)
+            valid_idx = has_bank.nonzero(as_tuple=False).squeeze(-1)
+            bank_tokens = self.bank_proj(bank_feat.index_select(0, valid_idx))
+            valid_query = s_t.index_select(0, valid_idx).unsqueeze(1)
+            valid_mask = bank_mask.index_select(0, valid_idx).logical_not()
             ctx, _ = self.retrieve_attn(
-                query=s_t.unsqueeze(1),
+                query=valid_query,
                 key=bank_tokens,
                 value=bank_tokens,
-                key_padding_mask=bank_mask.logical_not(),
+                key_padding_mask=valid_mask,
                 need_weights=False,
             )
-            topo_ctx = self.retrieve_norm(s_t + ctx.squeeze(1))
-        else:
-            topo_ctx = self.retrieve_norm(s_t + self.null_memory.unsqueeze(0))
+            topo_ctx_valid = self.retrieve_norm(
+                s_t.index_select(0, valid_idx) + ctx.squeeze(1)
+            )
+            topo_ctx = topo_ctx.clone()
+            topo_ctx.index_copy_(0, valid_idx, topo_ctx_valid)
 
         node_target = self.node_proj(node_feat)
         mu_node, raw_sigma = self.node_predictor(topo_ctx).chunk(2, dim=-1)

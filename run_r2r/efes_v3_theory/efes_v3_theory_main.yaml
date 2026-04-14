@@ -91,8 +91,8 @@ EFES_V3_THEORY:
   mi_temperature: 0.1
   grad_clip_norm: 5.0
   max_keep_checkpoints: 3
-  gate_bias: -2.0
-  gate_logit_init_std: 0.02
+  gate_eta_init: 0.5
+  gate_tau_init: 0.0
   delta_bound: 1.0
   lambda_scale: 1.0
   gate_threshold: 0.5
